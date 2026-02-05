@@ -1,6 +1,7 @@
 defmodule AtomicBucketTest do
   use ExUnit.Case
   require AtomicBucket
+  import Bitwise
   doctest AtomicBucket
 
   setup do
@@ -47,13 +48,13 @@ defmodule AtomicBucketTest do
   end
 
   test "request with max window works", %{bucket: bucket} do
-    window = div(Integer.pow(2, 31), 1000)
+    window = div(1 <<< 31, 1000)
     assert {:allow, 0, _} = AtomicBucket.request(bucket, window, 1, 1)
   end
 
   test "request with window above the max raises", %{bucket: bucket} do
     assert_raise ArgumentError, fn ->
-      window = div(Integer.pow(2, 31), 1000) + 1
+      window = div(1 <<< 31, 1000) + 1
       AtomicBucket.request(bucket, window, 1, 1)
     end
   end

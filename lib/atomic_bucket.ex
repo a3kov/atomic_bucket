@@ -4,10 +4,13 @@ defmodule AtomicBucket do
   """
   use GenServer
 
+  import Bitwise
+
   @token_bits 31
   @timer_bits 32
-  @max_window div(Integer.pow(2, 31), 1000)
-  @timer_modulus Integer.pow(2, @timer_bits)
+  @max_window div(1 <<< 31, 1000)
+  @max_capacity (1 <<< @token_bits) - 1
+  @timer_modulus 1 <<< @timer_bits
   @default_cleanup_interval :timer.hours(1)
   @default_max_idle_period :timer.hours(24)
 
@@ -122,7 +125,7 @@ defmodule AtomicBucket do
     if !pos_int?(burst_requests), do: int_arg_error("burst_requests")
 
     if window > @max_window do
-      raise ArgumentError, "Window is bigger than the max value (#{@max_window})."
+      raise ArgumentError, "Window is above the limit (#{@max_window})."
     end
 
     window_ms = window * 1000
@@ -130,10 +133,10 @@ defmodule AtomicBucket do
     refill = div(requests * cost, window_ms)
     capacity = burst_requests * cost
 
-    if capacity > Integer.pow(2, @token_bits) - 1 do
+    if capacity > @max_capacity do
       error =
         """
-        Required bucket capacity of #{capacity} can't fit in #{@token_bits} token bits. \
+        Required bucket capacity (#{capacity}) is above the limit (#{@max_capacity}). \
         Consider adjusting window size, requests or burst requests.
         """
 
