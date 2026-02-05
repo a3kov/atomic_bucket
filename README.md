@@ -1,5 +1,7 @@
 ## Atomic Bucket
 
+<img align="left"  style="margin-right:16px;" src="https://github.com/a3kov/atomic_bucket/raw/main/assets/readme_logo.png">
+
 Fast single node rate limiter implementing Token Bucket algorithm.
 The goal is to provide dependable solution that JustWorks™ with a 
 focus on performance, correctness and ease of use. Bucket data is
