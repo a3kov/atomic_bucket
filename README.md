@@ -110,15 +110,10 @@ For now, only fixed cost requests are supported.
 
 ## Benchmarks
 
-The library provides a benchmark measuring series of 1000 rate limit checks.
-Run it like so:
-```shell
-MIX_ENV=bench mix run bench/benchmark.exs
-```
-
-The benchmark is simply an illustration of available options, and doesn't try
-to compare different libraries. In general, benchmarks comparing different
-solutions should be taken with a grain of salt:
+The library provides a benchmark measuring series of 1000 rate limit checks
+(see bench/benchmark.exs). It serves as an illustration of available options,
+and doesn't try to compare different libraries. In general, benchmarks
+comparing different solutions should be taken with a grain of salt:
 
 - above certain point, a rate limiter is "fast enough" for many purposes.
   For BEAM this probably means "ETS or faster". Any atomics-based library
@@ -133,14 +128,14 @@ solutions should be taken with a grain of salt:
   than raw performance.
 
 ```shell
-$ MIX_ENV=bench mix run bench/benchmark.exs
+$ mix run bench/benchmark.exs
 Compiling 1 file (.ex)
 Generated atomic_bucket app
 Operating System: Linux
 CPU Information: 13th Gen Intel(R) Core(TM) i7-13700K
 Number of Available Cores: 24
 Available memory: 62.61 GB
-Elixir 1.18.4
+Elixir 1.19.5
 Erlang 27.1.3
 JIT enabled: true
 
@@ -161,19 +156,19 @@ Calculating statistics...
 Formatting results...
 
 Name                                        ips        average  deviation         median         99th %
-AtomicBucket (reusing bucket ref)        7.17 K      139.56 μs     ±9.14%      137.77 μs      189.45 μs
-AtomicBucket (persistent bucket)         5.78 K      173.08 μs     ±7.64%      171.01 μs      227.11 μs
-AtomicBucket (default)                   3.67 K      272.62 μs     ±8.45%      267.47 μs      385.34 μs
+AtomicBucket (reusing bucket ref)        7.98 K      125.25 μs     ±9.25%      123.19 μs      170.25 μs
+AtomicBucket (persistent bucket)         6.02 K      166.02 μs     ±7.60%      164.07 μs      216.57 μs
+AtomicBucket (default)                   3.88 K      258.04 μs     ±8.42%      253.24 μs      365.80 μs
 
 Comparison: 
-AtomicBucket (reusing bucket ref)        7.17 K
-AtomicBucket (persistent bucket)         5.78 K - 1.24x slower +33.53 μs
-AtomicBucket (default)                   3.67 K - 1.95x slower +133.07 μs
+AtomicBucket (reusing bucket ref)        7.98 K
+AtomicBucket (persistent bucket)         6.02 K - 1.33x slower +40.77 μs
+AtomicBucket (default)                   3.88 K - 2.06x slower +132.79 μs
 
 Extended statistics: 
 
 Name                                      minimum        maximum    sample size                     mode
-AtomicBucket (reusing bucket ref)       127.87 μs      567.22 μs        71.56 K                135.55 μs
-AtomicBucket (persistent bucket)        161.57 μs      519.53 μs        57.71 K                170.90 μs
-AtomicBucket (default)                  244.68 μs      655.59 μs        36.65 K     267.85 μs, 265.58 μs
+AtomicBucket (reusing bucket ref)       116.65 μs      497.45 μs        79.72 K                121.52 μs
+AtomicBucket (persistent bucket)        155.94 μs     1176.36 μs        60.16 K                162.48 μs
+AtomicBucket (default)                  232.99 μs      660.55 μs        38.71 K     249.56 μs, 252.43 μs
 ```

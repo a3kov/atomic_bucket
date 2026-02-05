@@ -1,7 +1,7 @@
 # This benchmark performs 1_000 rate limit checks in each iteration.
 #
 # Run it like so:
-# MIX_ENV=bench mix run bench/benchmark.exs
+# mix run bench/benchmark.exs
 
 require AtomicBucket
 
