@@ -30,11 +30,11 @@ defmodule AtomicBucket do
   long running processes instead of the bucket name for better performance.
 
   Arguments:
-    - `bucket` - bucket id, unique within its table
+    - `bucket` bucket id, unique within its table
     - `window` defines window in seconds
     - `window_requests` number of allowed requests in the window. Together
       with window defines refill rate
-    - `burst_requests` - number of burst requests. Defines bucket
+    - `burst_requests` number of burst requests. Defines bucket
       capacity. Bursts ignore target request rate, and thus may
       significantly alter effective rate.
 
@@ -273,8 +273,8 @@ defmodule AtomicBucket do
   end
 
   @doc """
-  Starts the process manages ETS table holding bucket references and periodically
-  removes idle bucket references.
+  Starts the process that manages ETS table for bucket data and
+  periodically deletes idle buckets.
 
   In addition to standard GenServer options, accepts the following:
     - `:cleanup_interval` interval in ms defining how often the server will try
@@ -305,13 +305,13 @@ defmodule AtomicBucket do
       {:write_concurrency, true}
     ])
 
-    schedule_gc(cleanup_interval)
+    schedule_cleanup(cleanup_interval)
 
     {:ok, %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period}}
   end
 
   @impl true
-  def handle_info(:run_gc, state) do
+  def handle_info(:cleanup, state) do
     %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period} = state
     timer = wrapping_timer()
 
@@ -340,12 +340,12 @@ defmodule AtomicBucket do
       table
     )
 
-    schedule_gc(cleanup_interval)
+    schedule_cleanup(cleanup_interval)
 
     {:noreply, state}
   end
 
-  defp schedule_gc(cleanup_interval) do
-    Process.send_after(self(), :run_gc, cleanup_interval)
+  defp schedule_cleanup(cleanup_interval) do
+    Process.send_after(self(), :cleanup, cleanup_interval)
   end
 end
