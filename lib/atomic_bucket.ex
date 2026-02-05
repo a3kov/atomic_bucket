@@ -58,9 +58,9 @@ defmodule AtomicBucket do
           | {:deny, timeout :: timeout(), :atomics.atomics_ref()}
 
   defmacro request(bucket, window, window_requests, burst_requests, opts \\ []) do
-    with {:ok, w} <- eval_const(window, "window", __CALLER__),
-         {:ok, r} <- eval_const(window_requests, "window_requests", __CALLER__),
-         {:ok, b} <- eval_const(burst_requests, "burst_requests", __CALLER__) do
+    with {:ok, w} <- expand_pos_int(window, "window", __CALLER__),
+         {:ok, r} <- expand_pos_int(window_requests, "window_requests", __CALLER__),
+         {:ok, b} <- expand_pos_int(burst_requests, "burst_requests", __CALLER__) do
       {capacity, refill, cost} = validated_bucket_params(w, r, b)
 
       quote do
@@ -73,7 +73,7 @@ defmodule AtomicBucket do
         )
       end
     else
-      :not_constant ->
+      _ ->
         quote do
           AtomicBucket.__unvalidated_request__(
             unquote(bucket),
@@ -83,30 +83,21 @@ defmodule AtomicBucket do
             unquote(opts)
           )
         end
+    end
+  end
 
-      {:invalid_literal, name} ->
+  defp expand_pos_int(ast, name, env) do
+    value = Macro.expand(ast, env)
+
+    cond do
+      is_integer(value) and value > 0 ->
+        {:ok, value}
+
+      Macro.quoted_literal?(value) ->
         int_arg_error(name)
-    end
-  end
 
-  defp eval_const(value, _name, _env) when is_integer(value) and value >= 0, do: {:ok, value}
-
-  defp eval_const({:@, _, [{attr, _, _}]}, name, env) do
-    # value = Module.get_attribute(env.module, attr)
-    value = env.module.__info__(:attributes)[attr]
-
-    if is_integer(value) && value >= 0 do
-      {:ok, value}
-    else
-      {:invalid_literal, name}
-    end
-  end
-
-  defp eval_const(value, name, _env) do
-    if Macro.quoted_literal?(value) do
-      {:invalid_literal, name}
-    else
-      :not_constant
+      true ->
+        :error
     end
   end
 
