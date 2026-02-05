@@ -25,9 +25,7 @@ defmodule AtomicBucket do
   Otherwise, the bucket is left untouched and the function returns
   `{:deny, timeout, bucket_ref}` where timeout is estimated interval in ms
   after which the request may be allowed, according to the bucket state and
-  refill rate.
-  `bucket_ref` is a reference to the bucket atomic, which can be used by
-  long running processes instead of the bucket name for better performance.
+  refill rate. `bucket_ref` is a reference to the bucket atomic.
 
   Arguments:
     - `bucket` bucket id, unique within its table
@@ -43,7 +41,7 @@ defmodule AtomicBucket do
       `:persistent_term`. Default is false.
 
     - `ref` bucket atomic reference. If provided, the call will try
-      to use it instead of fetching the ref from ETS or :persistent_term.
+      to use it instead of refetching.
 
     - `table` ETS table name atom. Default is AtomicBucket module name.
   """
