@@ -14,15 +14,18 @@ defmodule AtomicBucket.MixProject do
       # Hex
       description: "Fast single node rate limiter implementing Token Bucket algorithm.",
       package: [
-        files: ~w(lib .formatter.exs mix.exs README*),
+        files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
         licenses: ["Apache-2.0"],
-        links: %{"GitHub" => @source_url}
+        links: %{
+          "GitHub" => @source_url,
+          "Changelog" => "https://hexdocs.pm/atomic_bucket/changelog.html"
+        }
       ],
       # Docs
       docs: [
         main: "readme",
         logo: "assets/docs_logo.png",
-        extras: ["README.md"]
+        extras: ["README.md", "CHANGELOG.md"]
       ]
     ]
   end
