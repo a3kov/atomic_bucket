@@ -93,7 +93,7 @@ children = [
   },
   {
     AtomicBucket,
-    table: :table1,
+    table: :table2,
     cleanup_interval: :timer.minutes(20),
     max_idle_period: :timer.minutes(30)
   },
