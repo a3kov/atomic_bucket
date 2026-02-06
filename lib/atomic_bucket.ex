@@ -151,7 +151,7 @@ defmodule AtomicBucket do
     tokens_after_request = tokens_after_refill - cost
 
     if tokens_after_request >= 0 do
-      new_atomic = encode_bucket(timer, tokens_after_request, 0)
+      new_atomic = pack_bucket(timer, tokens_after_request, 0)
 
       case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
         :ok ->
@@ -188,7 +188,7 @@ defmodule AtomicBucket do
   defp open_bucket(bucket_ref, bucket, capacity, opts) do
     atomic = :atomics.get(bucket_ref, 1)
 
-    case decode_bucket(atomic) do
+    case unpack_bucket(atomic) do
       {timer, tokens, 0} ->
         {bucket_ref, atomic, timer, tokens}
 
@@ -207,7 +207,7 @@ defmodule AtomicBucket do
     table = table(opts)
     bucket_ref = :atomics.new(1, [])
     timer = wrapping_timer()
-    atomic = encode_bucket(timer, capacity, 0)
+    atomic = pack_bucket(timer, capacity, 0)
     :atomics.put(bucket_ref, 1, atomic)
 
     if :ets.insert_new(table, {bucket, bucket_ref}) do
@@ -243,7 +243,7 @@ defmodule AtomicBucket do
     if delta >= 0, do: delta, else: delta + @timer_modulus
   end
 
-  defp encode_bucket(timer, tokens, deleted) do
+  defp pack_bucket(timer, tokens, deleted) do
     <<atomic::signed-integer-size(64)>> =
       <<timer::integer-size(@timer_bits), tokens::integer-size(@token_bits),
         deleted::integer-size(1)>>
@@ -251,7 +251,7 @@ defmodule AtomicBucket do
     atomic
   end
 
-  defp decode_bucket(atomic) do
+  defp unpack_bucket(atomic) do
     <<
       timer::integer-size(@timer_bits),
       tokens::integer-size(@token_bits),
@@ -322,10 +322,10 @@ defmodule AtomicBucket do
     :ets.foldl(
       fn {bucket, bucket_ref}, acc ->
         atomic = :atomics.get(bucket_ref, 1)
-        {prev_timer, tokens, 0} = decode_bucket(atomic)
+        {prev_timer, tokens, 0} = unpack_bucket(atomic)
 
         if wrapping_timer_delta(prev_timer, timer) > max_idle_period do
-          new_atomic = encode_bucket(prev_timer, tokens, 1)
+          new_atomic = pack_bucket(prev_timer, tokens, 1)
 
           case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
             :ok ->
