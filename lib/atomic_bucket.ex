@@ -270,7 +270,7 @@ defmodule AtomicBucket do
       to delete idle buckets. Default is 1 hour.
 
     - `:max_idle_period` max period in ms since last allowed request before
-      the bucket is deleted. Default is 24hours.
+      the bucket is deleted. Default is 24 hours.
 
     - `table` ETS table name atom. Default is AtomicBucket module name.
   """
@@ -278,14 +278,25 @@ defmodule AtomicBucket do
     {gen_opts, opts} =
       Keyword.split(opts, [:debug, :name, :timeout, :spawn_opt, :hibernate_after])
 
+    validate_cleanup_arg!(:cleanup_interval, cleanup_interval(opts))
+    validate_cleanup_arg!(:max_idle_period, max_idle_period(opts))
+
     GenServer.start_link(__MODULE__, opts, gen_opts)
+  end
+
+  defp validate_cleanup_arg!(name, value) do
+    max_window_ms = @max_window * 1000
+
+    if !is_integer(value) || value <= 0 || value >= max_window_ms do
+      raise ArgumentError, "#{name} must be a positive integer less than #{max_window_ms}"
+    end
   end
 
   @impl true
   def init(opts) do
     table = Keyword.get(opts, :table, __MODULE__)
-    cleanup_interval = Keyword.get(opts, :cleanup_interval, @default_cleanup_interval)
-    max_idle_period = Keyword.get(opts, :max_idle_period, @default_max_idle_period)
+    cleanup_interval = cleanup_interval(opts)
+    max_idle_period = max_idle_period(opts)
 
     :ets.new(table, [
       :named_table,
@@ -298,6 +309,10 @@ defmodule AtomicBucket do
 
     {:ok, %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period}}
   end
+
+  defp cleanup_interval(opts), do: Keyword.get(opts, :cleanup_interval, @default_cleanup_interval)
+
+  defp max_idle_period(opts), do: Keyword.get(opts, :max_idle_period, @default_max_idle_period)
 
   @impl true
   def handle_info(:cleanup, state) do
