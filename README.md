@@ -61,9 +61,11 @@ require AtomicBucket
 # Averate rate: 10 reqs/s with 3 burst requests. 
 case AtomicBucket.request(:mybucket, 1, 10, 3) do
   {:allow, count, _ref} ->
-    # Request is allowed. May immediately attempt to make additional <count> calls.
+    # Request is allowed. May immediately attempt to make additional
+    # <count> calls.
   {:deny, timeout, _ref} ->
-    # Request is denied. The bucket may have enough tokens in <timeout> milliseconds.
+    # Request is denied. The bucket may have enough tokens in <timeout>
+    # milliseconds.
 end
 
 # Bucket id can be any term (except for references).
