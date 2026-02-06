@@ -1,4 +1,4 @@
-## Atomic Bucket
+# Atomic Bucket
 
 <img align="left"  style="margin-right:16px;" src="https://github.com/a3kov/atomic_bucket/raw/main/assets/readme_logo.png">
 
@@ -10,7 +10,8 @@ ETS and optionally cached as persistent terms.
 
 <div style="clear: both"></div><br>
 
-Features:
+## Features
+
  - lock-free and race-free with compare-and-swap operations
 
  - BlazingFast™ performance, see benchmarks section. Req/s go brrrrrr
