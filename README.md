@@ -172,3 +172,9 @@ AtomicBucket (reusing bucket ref)       116.65 μs      497.45 μs        79.72 
 AtomicBucket (persistent bucket)        155.94 μs     1176.36 μs        60.16 K                162.48 μs
 AtomicBucket (default)                  232.99 μs      660.55 μs        38.71 K     249.56 μs, 252.43 μs
 ```
+
+## License
+
+Copyright 2026 Andrey Tretyakov
+The source code of the project is released under Apache License 2.0.
+Check LICENSE file for more information.
