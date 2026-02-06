@@ -69,7 +69,8 @@ case AtomicBucket.request(:mybucket, 1, 10, 3) do
     # milliseconds.
 end
 
-# Bucket id can be any term (except for references).
+# Bucket id can be any term.
+``
 AtomicBucket.request({:client, ip_addr}, 1, 10, 3)
 
 # Cache bucket reference in :persistent_term for better performance.
