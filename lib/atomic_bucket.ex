@@ -19,19 +19,21 @@ defmodule AtomicBucket do
 
   The bucket is initialized in full state. Every request will refill
   the bucket if needed and check if the new token amount is enough
-  to make the request. On success the function returns
-  `{:allow, requests, bucket_ref}` where requests is the number of possible
-  additional requests based on the remaining tokens in the bucket.
-  Otherwise, the bucket is left untouched and the function returns
-  `{:deny, timeout, bucket_ref}` where timeout is estimated interval in ms
-  after which the request may be allowed, according to the bucket state and
-  refill rate. `bucket_ref` is a reference to the bucket atomic.
+  to make the request. On success the request tokens are removed from
+  the bucket and the function returns `{:allow, requests, bucket_ref}`
+  where requests is the number of possible additional requests based
+  on the remaining tokens in the bucket. Otherwise, the bucket is left
+  untouched and the function returns `{:deny, timeout, bucket_ref}`
+  where timeout is estimated period in ms after which the request may
+  be allowed, according to the bucket state and the refill rate.
+  `bucket_ref` is a reference to the bucket atomic.
 
   Arguments:
     - `bucket` bucket id, unique within its table
     - `window` defines window in seconds
-    - `window_requests` number of allowed requests in the window. Together
-      with window defines refill rate
+    - `window_requests` number of allowed requests in the window,
+      according to the target rate. Together with window defines
+      refill rate of the bucket.
     - `burst_requests` number of burst requests. Defines bucket
       capacity. Bursts ignore target request rate, and thus may
       significantly alter effective rate.
@@ -43,7 +45,7 @@ defmodule AtomicBucket do
     - `ref` bucket atomic reference. If provided, the call will try
       to use it instead of refetching.
 
-    - `table` ETS table name atom. Default is AtomicBucket module name.
+    - `table` ETS table name atom. Default is AtomicBucket.
   """
   @spec request(
           bucket :: any(),
@@ -272,7 +274,7 @@ defmodule AtomicBucket do
     - `:max_idle_period` max period in ms since last allowed request before
       the bucket is deleted. Default is 24 hours.
 
-    - `table` ETS table name atom. Default is AtomicBucket module name.
+    - `table` ETS table name atom. Default is AtomicBucket.
   """
   def start_link(opts) do
     {gen_opts, opts} =
