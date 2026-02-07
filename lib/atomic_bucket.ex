@@ -324,12 +324,12 @@ defmodule AtomicBucket do
   @impl true
   def handle_info(:cleanup, state) do
     %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period} = state
-    timer = wrapping_timer()
 
     :ets.foldl(
       fn {bucket, bucket_ref}, acc ->
         atomic = :atomics.get(bucket_ref, 1)
         {prev_timer, tokens, 0} = unpack_bucket(atomic)
+        timer = wrapping_timer()
 
         if wrapping_timer_delta(prev_timer, timer) > max_idle_period do
           new_atomic = pack_bucket(prev_timer, tokens, 1)
