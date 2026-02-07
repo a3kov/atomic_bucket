@@ -267,6 +267,11 @@ defmodule AtomicBucket do
   Starts the process that manages ETS table for bucket data and
   periodically deletes idle buckets.
 
+  This function performs only basic validation of the cleanup parameters.
+  The developer must ensure that buckets idling for more than ~24 days
+  are deleted. AtomicBucket uses wrapping timer that provides incorrect
+  values for longer periods.
+
   In addition to standard GenServer options, accepts the following:
     - `:cleanup_interval` interval in ms defining how often the server will try
       to delete idle buckets. Default is 1 hour.
