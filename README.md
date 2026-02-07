@@ -8,7 +8,7 @@ focus on performance, correctness and ease of use. Bucket data is
 stored using `:atomics` module. Bucket references are stored in
 ETS and optionally cached as persistent terms.
 
-<div style="clear: both"></div><br>
+<div style="clear: both"></div>  
 
 ## Features
 
@@ -178,6 +178,6 @@ AtomicBucket (default)                  232.99 μs      660.55 μs        38.71 
 
 ## License
 
-Copyright 2026 Andrey Tretyakov<br>
+Copyright 2026 Andrey Tretyakov  
 The source code of the project is released under Apache License 2.0.
 Check LICENSE file for more information.
