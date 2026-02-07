@@ -170,7 +170,7 @@ defmodule AtomicBucket do
 
   defp get_bucket(bucket, capacity, opts) do
     cond do
-      bucket_ref = Keyword.get(opts, :ref, nil) ->
+      bucket_ref = Keyword.get(opts, :ref) ->
         open_bucket(bucket_ref, bucket, capacity, opts)
 
       bucket_ref = persistent_bucket?(opts) && pt_get(bucket, opts) ->
