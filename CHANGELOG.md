@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.2 (2026-02-08)
+
+More docs improvements
+
 ## v0.1.1 (2026-02-07)
 
 Minor improvements and docs updates
