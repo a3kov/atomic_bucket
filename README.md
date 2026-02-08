@@ -31,7 +31,7 @@ ETS and optionally cached as persistent terms.
 
 ## Installation
 
-Adding it to your list of dependencies in `mix.exs` and run `mix deps.get`:
+Add it to your list of dependencies in `mix.exs` and run `mix deps.get`:
 
 ```elixir
 def deps do
