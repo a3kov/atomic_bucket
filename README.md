@@ -8,7 +8,7 @@ focus on performance, correctness and ease of use. Bucket data is
 stored using `:atomics` module. Bucket references are stored in
 ETS and optionally cached as persistent terms.
 
-<div style="clear: both"></div>  
+<div style="clear: both"></div><br>
 
 ## Features
 
