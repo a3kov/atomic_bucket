@@ -42,7 +42,7 @@ end
 ```
 
 You must start AtomicBucket server for each bucket table you want to use - without
-it the library will not work.
+it the library will not work. Add to your application:
 
 ```elixir
 children = [.., AtomicBucket, ..]
@@ -54,7 +54,8 @@ the last 24 hours. See `start_link/1` for info about available options.
 
 Use `request/5` macro with desired average rate and burst parameters.
 When possible, call the macro with literal arguments for better
-performance and compile-time validation.
+performance and compile-time validation. Module attributes are fine
+too.
 
 ```elixir
 require AtomicBucket
@@ -68,22 +69,31 @@ case AtomicBucket.request(:mybucket, 1, 10, 3) do
     # Request is denied. The bucket may have enough tokens in <timeout>
     # milliseconds.
 end
+```
 
-# Bucket id can be any term.
+Bucket id can be any term.
+```elixir
 AtomicBucket.request({:client, ip_addr}, 1, 10, 3)
+```
 
-# Cache bucket reference in :persistent_term for better performance.
-# Good fit for buckets with low churn, best for fixed buckets like per-user-id
-# rate limits. See :persistent_term docs for more info on the tradeoffs.
+Cache bucket reference in `:persistent_term` for better performance.
+Good fit for buckets with low churn. Best for fixed buckets like per-user-id
+rate limits. See [:persistent_term docs](https://www.erlang.org/doc/apps/erts/persistent_term.html#content)
+for more info on the tradeoffs.
+```elixir
 AtomicBucket.request(:mybucket, 1, 10, 3, persistent: true)
+```
 
-# Reuse bucket references in long running processes for top performance.
+Reuse bucket references in long running processes for top performance.
+```elixir
 {:allow, _requests, bucket_ref} = AtomicBucket.request(:mybucket, 1, 10, 3)
 AtomicBucket.request(:mybucket, 1, 10, 3, ref: bucket_ref)
+```
 
-# To implement different retention policies start multiple servers, and
-# use the table option of request/5. Bucket ids are table-scoped and don't
-# have to be globally unique.
+To implement different retention policies start multiple servers, and
+use the table option of `request/5`. Bucket ids are table-scoped and don't
+have to be globally unique.
+```elixir
 children = [
   {
     AtomicBucket,
