@@ -160,7 +160,7 @@ defmodule AtomicBucket do
           {:allow, div(tokens_after_request, cost), bucket_ref}
 
         _ ->
-          do_params_request(bucket_ref, capacity, refill_ms, cost, opts)
+          do_params_request(bucket, capacity, refill_ms, cost, opts)
       end
     else
       timeout = div(cost - tokens_after_refill, refill_ms)
