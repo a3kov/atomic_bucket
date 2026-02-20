@@ -54,7 +54,7 @@ defmodule AtomicBucket do
           burst_requests :: pos_integer(),
           opts :: keyword()
         ) ::
-          {:allow, bucket_requests :: pos_integer(), :atomics.atomics_ref()}
+          {:allow, bucket_requests :: non_neg_integer(), :atomics.atomics_ref()}
           | {:deny, timeout :: timeout(), :atomics.atomics_ref()}
 
   defmacro request(bucket, window, window_requests, burst_requests, opts \\ []) do
