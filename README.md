@@ -35,7 +35,7 @@ Add it to your list of dependencies in `mix.exs` and run `mix deps.get`:
 ```elixir
 def deps do
   [
-    {:atomic_bucket, "~> 0.1"}
+    {:atomic_bucket, "~> 0.2"}
   ]
 end
 ```
@@ -113,7 +113,7 @@ parameters.
 The library makes no effort to ensure that bucket parameters remain
 stable across calls: the parameters are not stored at all! Using same bucket
 with different parameters will result in silent bugs. This also applies to 
-mixing `request/5` and raw_request/5` - it must be avoided.
+mixing `request/5` and `raw_request/5` - it must be avoided.
 
 ## Benchmarks
 
