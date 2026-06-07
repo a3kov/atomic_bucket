@@ -58,13 +58,13 @@ defmodule AtomicBucket do
           | {:deny, timeout :: timeout(), :atomics.atomics_ref()}
 
   defmacro request(bucket, window, window_requests, burst_requests, opts \\ []) do
-    with {:ok, w} <- expand_pos_int(window, "window", __CALLER__),
-         {:ok, r} <- expand_pos_int(window_requests, "window_requests", __CALLER__),
-         {:ok, b} <- expand_pos_int(burst_requests, "burst_requests", __CALLER__) do
-      {capacity, refill, cost} = validated_bucket_params(w, r, b)
+    with {:ok, w} <- expand_int(window, "window", __CALLER__, true),
+         {:ok, r} <- expand_int(window_requests, "window_requests", __CALLER__, true),
+         {:ok, b} <- expand_int(burst_requests, "burst_requests", __CALLER__, true) do
+      {capacity, refill, cost} = fixed_cost_params(w, r, b)
 
       quote do
-        AtomicBucket.__bucket_params_request__(
+        AtomicBucket.__validated_request__(
           unquote(bucket),
           unquote(capacity),
           unquote(refill),
@@ -86,34 +86,108 @@ defmodule AtomicBucket do
     end
   end
 
-  defp expand_pos_int(ast, name, env) do
-    value = Macro.expand(ast, env)
+  @doc """
+  Checks if the request is allowed according to bucket parameters.
+  Differences from `request/5`:
+    - direct control of bucket parameters (less ergonomic but more powerful)
+    - always returns remaining tokens
+    - supports variable cost
+    - supports negative cost, i.e. "refunds"
+    - because of token accounting refills the bucket on every call (eager
+      refill), while `request/5` skips it for denied requests (lazy refill)
 
-    cond do
-      is_integer(value) and value > 0 ->
-        {:ok, value}
+  The bucket is initialized in full state. Every request will refill
+  the bucket if needed and check if the new token amount with the cost applied
+  is valid (not negative). Tokens above the capacity are discarded.
 
-      Macro.quoted_literal?(value) ->
-        int_arg_error(name)
+  Returns `{:allow, tokens, bucket_ref}` or `{:deny, tokens, bucket_ref}`
+  where `tokens` is the number of remaining tokens in the bucket.
 
-      true ->
-        :error
+  Arguments:
+    - `bucket` bucket id, unique within its table
+    - `capacity` bucket capacity
+    - `refill_ms` number of tokens added to the bucket every millisecond
+    - `cost` number of tokens added or removed from the bucket for the current
+      request to succeed, where negative values mean addition.
+
+  Supports same options as request/5
+  """
+  @spec raw_request(
+          bucket :: any(),
+          capacity :: pos_integer(),
+          refill_ms :: pos_integer(),
+          cost :: integer(),
+          opts :: keyword()
+        ) :: {:allow | :deny, tokens :: non_neg_integer(), :atomics.atomics_ref()}
+
+  defmacro raw_request(bucket, capacity, refill_ms, cost, opts \\ []) do
+    with {:ok, cap_int} <- expand_int(capacity, "capacity", __CALLER__, true),
+         {:ok, ref_int} <- expand_int(refill_ms, "refill_ms", __CALLER__, true),
+         {:ok, cost_int} <- expand_int(cost, "cost", __CALLER__) do
+      validate_raw_params!(cap_int, ref_int, cost_int)
+
+      quote do
+        AtomicBucket.__validated_raw_request__(
+          unquote(bucket),
+          unquote(cap_int),
+          unquote(ref_int),
+          unquote(cost_int),
+          unquote(opts)
+        )
+      end
+    else
+      _ ->
+        quote do
+          AtomicBucket.__unvalidated_raw_request__(
+            unquote(bucket),
+            unquote(capacity),
+            unquote(refill_ms),
+            unquote(cost),
+            unquote(opts)
+          )
+        end
+    end
+  end
+
+  defp expand_int(ast, name, env, pos? \\ false) do
+    case Macro.expand(ast, env) do
+      i when is_integer(i) ->
+        {:ok, i}
+
+      {:-, _, [i]} when is_integer(i) ->
+        if pos?, do: pos_int_arg_error!(name), else: {:ok, i}
+
+      other ->
+        if Macro.quoted_literal?(other) do
+          if pos?, do: pos_int_arg_error!(name), else: int_arg_error!(name)
+        else
+          :error
+        end
     end
   end
 
   def __unvalidated_request__(bucket, window, requests, burst_requests, opts) do
-    {capacity, refill, cost} = validated_bucket_params(window, requests, burst_requests)
-    do_params_request(bucket, capacity, refill, cost, opts)
+    {capacity, refill_ms, cost} = fixed_cost_params(window, requests, burst_requests)
+    fixed_cost_request(bucket, capacity, refill_ms, cost, opts)
   end
 
-  def __bucket_params_request__(bucket, capacity, refill, cost, opts) do
-    do_params_request(bucket, capacity, refill, cost, opts)
+  def __validated_request__(bucket, capacity, refill_ms, cost, opts) do
+    fixed_cost_request(bucket, capacity, refill_ms, cost, opts)
   end
 
-  defp validated_bucket_params(window, requests, burst_requests) do
-    if !pos_int?(window), do: int_arg_error("window")
-    if !pos_int?(requests), do: int_arg_error("window_requests")
-    if !pos_int?(burst_requests), do: int_arg_error("burst_requests")
+  def __unvalidated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
+    validate_raw_params!(capacity, refill_ms, cost)
+    raw_params_request(bucket, capacity, refill_ms, cost, opts)
+  end
+
+  def __validated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
+    raw_params_request(bucket, capacity, refill_ms, cost, opts)
+  end
+
+  defp fixed_cost_params(window, requests, burst_requests) do
+    if !pos_int?(window), do: pos_int_arg_error!("window")
+    if !pos_int?(requests), do: pos_int_arg_error!("window_requests")
+    if !pos_int?(burst_requests), do: pos_int_arg_error!("burst_requests")
 
     if window > @max_window do
       raise ArgumentError, "Window is above the limit (#{@max_window})."
@@ -137,13 +211,35 @@ defmodule AtomicBucket do
     {capacity, refill, cost}
   end
 
+  defp validate_raw_params!(capacity, refill_ms, cost) do
+    if !pos_int?(capacity), do: pos_int_arg_error!("capacity")
+    if !pos_int?(refill_ms), do: pos_int_arg_error!("refill_ms")
+    if !is_integer(cost), do: int_arg_error!("cost")
+
+    if capacity > @max_capacity do
+      raise ArgumentError, "Capacity is above the limit (#{@max_capacity})."
+    end
+
+    if refill_ms >= capacity do
+      raise ArgumentError, "refill_ms must be less than capacity."
+    end
+
+    if abs(cost) > capacity do
+      raise ArgumentError, "cost can't exceed capacity."
+    end
+  end
+
   defp pos_int?(value), do: is_integer(value) && value > 0
 
-  defp int_arg_error(name) do
+  defp int_arg_error!(name) do
+    raise ArgumentError, "Invalid argument: #{name} must be an integer."
+  end
+
+  defp pos_int_arg_error!(name) do
     raise ArgumentError, "Invalid argument: #{name} must be a positive integer."
   end
 
-  defp do_params_request(bucket, capacity, refill_ms, cost, opts) do
+  defp fixed_cost_request(bucket, capacity, refill_ms, cost, opts) do
     timer = wrapping_timer()
     {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
 
@@ -160,11 +256,44 @@ defmodule AtomicBucket do
           {:allow, div(tokens_after_request, cost), bucket_ref}
 
         _ ->
-          do_params_request(bucket, capacity, refill_ms, cost, opts)
+          fixed_cost_request(bucket, capacity, refill_ms, cost, opts)
       end
     else
-      timeout = div(cost - tokens_after_refill, refill_ms)
-      {:deny, timeout, bucket_ref}
+      {:deny, div(cost - tokens_after_refill, refill_ms), bucket_ref}
+    end
+  end
+
+  defp raw_params_request(bucket, capacity, refill_ms, cost, opts) do
+    timer = wrapping_timer()
+    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
+
+    tokens_after_refill =
+      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
+
+    tokens_after_request = min(capacity, tokens_after_refill - cost)
+
+    {verdict, new_tokens, new_atomic} =
+      cond do
+        tokens_after_request >= 0 ->
+          {:allow, tokens_after_request, pack_bucket(timer, tokens_after_request, 0)}
+
+        tokens_after_refill == tokens ->
+          {:deny, tokens, nil}
+
+        true ->
+          {:deny, tokens_after_refill, pack_bucket(timer, tokens_after_refill, 0)}
+      end
+
+    if new_atomic do
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          {verdict, new_tokens, bucket_ref}
+
+        _ ->
+          raw_params_request(bucket, capacity, refill_ms, cost, opts)
+      end
+    else
+      {verdict, new_tokens, bucket_ref}
     end
   end
 
@@ -199,7 +328,7 @@ defmodule AtomicBucket do
         # delete references to it, and eventually some process (or the
         # current one) will succeed in recreating it, if we keep retrying.
         # We make sure this is not a reference passed via options, so that
-        # we don't get stuck in eternal loop.
+        # we don't get stuck in endless loop.
         opts = Keyword.drop(opts, [:ref])
         get_bucket(bucket, capacity, opts)
     end
@@ -359,4 +488,6 @@ defmodule AtomicBucket do
   defp schedule_cleanup(cleanup_interval) do
     Process.send_after(self(), :cleanup, cleanup_interval)
   end
+
+  def __max_capacity__(), do: @max_capacity
 end

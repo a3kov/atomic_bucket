@@ -12,14 +12,14 @@ defmodule AtomicBucketTest do
     %{bucket: :erlang.unique_integer([:positive])}
   end
 
-  test "allows bursts", %{bucket: bucket} do
+  test "request allows bursts", %{bucket: bucket} do
     assert {:allow, 2, _} = AtomicBucket.request(bucket, 1, 10, 3)
     assert {:allow, 1, _} = AtomicBucket.request(bucket, 1, 10, 3)
     assert {:allow, 0, _} = AtomicBucket.request(bucket, 1, 10, 3)
     assert {:deny, _, _} = AtomicBucket.request(bucket, 1, 10, 3)
   end
 
-  test "limits the rate", %{bucket: bucket} do
+  test "request limits the rate", %{bucket: bucket} do
     assert {:allow, 0, _} = AtomicBucket.request(bucket, 1, 10, 1)
     assert {:deny, _, _} = AtomicBucket.request(bucket, 1, 10, 1)
     Process.sleep(90)
@@ -133,5 +133,46 @@ defmodule AtomicBucketTest do
     assert ^bucket_ref2 = :persistent_term.get({AtomicBucket, table2, bucket}, nil)
     Process.exit(pid1, :normal)
     Process.exit(pid2, :normal)
+  end
+
+  test "raw request allows bursts", %{bucket: bucket} do
+    # 10 req/s, burst=2
+    assert {:allow, 100, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+    assert {:allow, 0, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+    assert {:deny, 0, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+  end
+
+  test "raw request limits the rate", %{bucket: bucket} do
+    # 10 req/s, burst=1
+    assert {:allow, 0, _} = AtomicBucket.raw_request(bucket, 100, 1, 100)
+    assert {:deny, 0, _} = AtomicBucket.raw_request(bucket, 100, 1, 100)
+    Process.sleep(90)
+    {verdict, amount, _} = AtomicBucket.raw_request(bucket, 100, 1, 100)
+    assert verdict == :deny
+    assert is_integer(amount) and amount > 0
+    Process.sleep(10)
+    assert {:allow, _, _} = AtomicBucket.raw_request(bucket, 100, 1, 100)
+  end
+
+  test "raw request supports negative and variable cost", %{bucket: bucket} do
+    # 10 req/s, burst=2
+    assert {:allow, 100, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+    assert {:allow, 0, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+    assert {:deny, 0, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+    assert {:allow, 200, _} = AtomicBucket.raw_request(bucket, 200, 1, -200)
+    assert {:allow, 100, _} = AtomicBucket.raw_request(bucket, 200, 1, 100)
+  end
+
+  test "raw request with max capacity works", %{bucket: bucket} do
+    capacity = AtomicBucket.__max_capacity__()
+    tokens = capacity - 1
+    assert {:allow, ^tokens, _} = AtomicBucket.raw_request(bucket, capacity, 1, 1)
+  end
+
+  test "raw request with capacity above the max raises", %{bucket: bucket} do
+    assert_raise ArgumentError, fn ->
+      capacity = AtomicBucket.__max_capacity__() + 1
+      AtomicBucket.raw_request(bucket, capacity, 1, 1)
+    end
   end
 end
