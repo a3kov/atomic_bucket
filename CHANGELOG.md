@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.0 (2026-06-07)
+
+Add support for variable cost and token "refunds" via raw_request/5
+
 ## v0.1.3 (2026-02-10)
 
 Fix: bucket reference passed instead of bucket id in do_params_request/5
