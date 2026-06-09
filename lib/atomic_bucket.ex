@@ -15,7 +15,8 @@ defmodule AtomicBucket do
   @default_max_idle_period :timer.hours(24)
 
   @doc """
-  Checks if the request is allowed according to desired request rate.
+  Checks if the request is allowed according to desired rate assuming
+  all requests have same cost.
 
   The bucket is initialized in full state. Every request will refill
   the bucket if needed and check if the new token amount is enough
@@ -88,11 +89,10 @@ defmodule AtomicBucket do
 
   @doc """
   Checks if the request is allowed according to bucket parameters.
+
   Differences from `request/5`:
-    - direct control of bucket parameters (less ergonomic but more powerful)
-    - always returns remaining tokens
-    - supports variable cost
-    - supports negative cost, i.e. "refunds"
+    - direct control of bucket parameters with support for variable
+      (including zero and negative) cost
     - because of token accounting refills the bucket on every call (eager
       refill), while `request/5` skips it for denied requests (lazy refill)
 
@@ -328,7 +328,7 @@ defmodule AtomicBucket do
         # delete references to it, and eventually some process (or the
         # current one) will succeed in recreating it, if we keep retrying.
         # We make sure this is not a reference passed via options, so that
-        # we don't get stuck in endless loop.
+        # we don't get stuck in infinite loop.
         opts = Keyword.drop(opts, [:ref])
         get_bucket(bucket, capacity, opts)
     end

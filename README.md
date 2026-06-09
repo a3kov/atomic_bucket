@@ -20,11 +20,12 @@ ETS and optionally cached as persistent terms.
 
  - millisecond tick supporting wider range of parameters and preventing request starvation
 
- - automatic calculation of bucket parameters based on average rate and burst size
+ - automatic calculation of bucket parameters based on target rate and burst size
+  (for fixed cost requests)
 
  - handy timeouts for retries
 
- - support for token refunds and variable cost requests
+ - support for token "refunds" and variable cost requests
 
  - compile-time validation of arguments when possible
 
@@ -52,7 +53,7 @@ the last 24 hours. See `start_link/1` for info about available options.
 ## Usage
 
 For simple cases where requests have fixed cost use `request/5` macro with desired
-average rate and burst parameters. When possible, call the macro with literal arguments
+rate and burst parameters. When possible, call the macro with literal arguments
 for better performance and compile-time validation. Module attributes are fine too.
 
 ```elixir
@@ -88,11 +89,11 @@ Reuse bucket references in long running processes for top performance.
 AtomicBucket.request(:mybucket, 1, 10, 3, ref: bucket_ref)
 ```
 
-Use `raw_request/5` macro to implement advanced features such as token refunds
+Use `raw_request/5` macro to implement advanced features such as token "refunds"
 or variable cost. It supports same options as `request/5`
 ```elixir
 # This would be 10 req/s with 2 burst requests in fixed cost scenario
-{:allow, remaining_tokens, ref} = AtomicBucket.raw_request(:mybucket, 200, 1, 100)
+{:allow, tokens, ref} = AtomicBucket.raw_request(:mybucket, 200, 1, 100)
 # But the next request may have a different cost
 AtomicBucket.raw_request(:mybucket, 200, 1, 150)
 # Token "refund" is always allowed
@@ -113,7 +114,8 @@ parameters.
 The library makes no effort to ensure that bucket parameters remain
 stable across calls: the parameters are not stored at all! Using same bucket
 with different parameters will result in silent bugs. This also applies to 
-mixing `request/5` and `raw_request/5` - it must be avoided.
+mixing `request/5` and `raw_request/5` - it must be avoided. No guarantee
+of future compatibility of the two is provided.
 
 ## Benchmarks
 
