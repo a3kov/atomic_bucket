@@ -14,6 +14,23 @@ defmodule AtomicBucket do
   @default_cleanup_interval :timer.hours(1)
   @default_max_idle_period :timer.hours(24)
 
+  @compile {:inline,
+            [
+              validate_raw_params!: 3,
+              get_bucket: 3,
+              open_bucket: 4,
+              try_create_bucket: 3,
+              pack_bucket: 3,
+              unpack_bucket: 1,
+              wrapping_timer: 0,
+              wrapping_timer_delta: 2,
+              persistent_bucket?: 1,
+              pos_int?: 1,
+              pt_get: 2,
+              pt_bucket_key: 2,
+              table: 1
+            ]}
+
   @doc """
   Checks if the request is allowed according to desired rate assuming
   all requests have same cost.
