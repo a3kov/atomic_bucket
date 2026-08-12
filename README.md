@@ -36,7 +36,7 @@ Add it to your list of dependencies in `mix.exs` and run `mix deps.get`:
 ```elixir
 def deps do
   [
-    {:atomic_bucket, "~> 0.2"}
+    {:atomic_bucket, "~> 0.3"}
   ]
 end
 ```
