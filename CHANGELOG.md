@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.0 (2026-08-12)
+
+20-30% performance gain for normal size buckets on 64bit.
+Benchmarking improvements.
+
 ## v0.2.0 (2026-06-07)
 
 Add support for variable cost and token "refunds" via raw_request/5
