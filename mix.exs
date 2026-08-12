@@ -25,7 +25,7 @@ defmodule AtomicBucket.MixProject do
       docs: [
         main: "readme",
         logo: "assets/docs_logo.png",
-        extras: ["README.md", "CHANGELOG.md"]
+        extras: ["README.md", "BENCHMARKING.md", "CHANGELOG.md"]
       ]
     ]
   end

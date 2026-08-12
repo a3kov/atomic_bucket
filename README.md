@@ -119,80 +119,9 @@ of future compatibility of the two is provided.
 
 ## Benchmarks
 
-The library provides a benchmark measuring series of 1000 rate limit checks
-(see bench/benchmark.exs). It serves as an illustration of available options.
-In general, such benchmarks should be taken with a grain of salt:
-
-- they often use artificial conditions different from real life, thus 
-  devaluing the results
-
-- above certain point a rate limiter is "fast enough" for many purposes.
-  For BEAM this probably means "ETS or faster". Any atomics-based library
-  should be much faster than ETS and is likely the fastest you can get.
-
-- comparing results between differently implemented or completely different
-  algorithms is neither 100% valid nor very useful. It's very easy to make a
-  pointless benchmark measuring wrong things, simply because it's hard to
-  make different solutions perform same work achieving same results.
-
-- Tradeoffs are important. It's better to look at the overall picture, rather
-  than raw performance.
-
-```shell
-$ mix run bench/benchmark.exs
-Operating System: Linux
-CPU Information: 13th Gen Intel(R) Core(TM) i7-13700K
-Number of Available Cores: 24
-Available memory: 62.52 GB
-Elixir 1.20.0
-Erlang 29.0.1
-JIT enabled: true
-
-Benchmark suite executing with the following configuration:
-warmup: 2 s
-time: 5 s
-memory time: 0 ns
-reduction time: 0 ns
-parallel: 1
-inputs: none specified
-Estimated total run time: 42 s
-Excluding outliers: false
-
-Benchmarking raw_request (literals, default opts) ...
-Benchmarking raw_request (non-literals, default opts) ...
-Benchmarking request (literals, default opts) ...
-Benchmarking request (literals, persistent) ...
-Benchmarking request (literals, reusing ref) ...
-Benchmarking request (non-literals, default opts) ...
-Calculating statistics...
-Formatting results...
-
-Name                                               ips        average  deviation         median         99th %
-request (literals, reusing ref)                11.81 K       84.65 μs    ±13.79%       82.21 μs      135.81 μs
-request (literals, persistent)                  8.42 K      118.71 μs    ±11.83%      115.87 μs      193.22 μs
-raw_request (literals, default opts)            5.31 K      188.18 μs    ±12.08%      183.14 μs      308.21 μs
-request (literals, default opts)                5.29 K      188.90 μs    ±11.78%      184.10 μs      306.53 μs
-raw_request (non-literals, default opts)        5.00 K      200.19 μs    ±11.56%      195.08 μs      321.36 μs
-request (non-literals, default opts)            4.27 K      234.02 μs    ±10.90%      227.43 μs      353.50 μs
-
-Comparison: 
-request (literals, reusing ref)                11.81 K
-request (literals, persistent)                  8.42 K - 1.40x slower +34.06 μs
-raw_request (literals, default opts)            5.31 K - 2.22x slower +103.53 μs
-request (literals, default opts)                5.29 K - 2.23x slower +104.26 μs
-raw_request (non-literals, default opts)        5.00 K - 2.37x slower +115.55 μs
-request (non-literals, default opts)            4.27 K - 2.76x slower +149.37 μs
-
-Extended statistics: 
-
-Name                                             minimum        maximum    sample size                     mode
-request (literals, reusing ref)                 77.47 μs      369.01 μs        58.94 K79.16 μs, 79.58 μs, 79.75
-request (literals, persistent)                 110.33 μs      378.21 μs        42.05 K     112.17 μs, 112.11 μs
-raw_request (literals, default opts)           164.90 μs      464.82 μs        26.54 K                187.78 μs
-request (literals, default opts)               164.81 μs      418.69 μs        26.44 K     186.95 μs, 187.26 μs
-raw_request (non-literals, default opts)       176.23 μs      470.45 μs        24.95 K198.13 μs, 189.40 μs, 198
-request (non-literals, default opts)           206.55 μs      434.20 μs        21.34 K227.04 μs, 224.74 μs, 227
-```
+The library provides a comprehensive benchmark measuring series of rate
+limit checks with different parameters and bucket sizes.
+See BENCHMARKING.md for more info.
 
 ## License
 
