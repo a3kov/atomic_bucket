@@ -14,7 +14,7 @@ defmodule AtomicBucket.MixProject do
       # Hex
       description: "Fast single node rate limiter implementing Token Bucket algorithm.",
       package: [
-        files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
+        files: ~w(lib .formatter.exs mix.exs README.md BENCHMARKING.md CHANGELOG.md LICENSE),
         licenses: ["Apache-2.0"],
         links: %{
           "GitHub" => @source_url,
