@@ -391,11 +391,11 @@ defmodule AtomicBucket do
     if delta >= 0, do: delta, else: delta + @timer_modulus
   end
 
-  def pack_bucket(tokens, timer, deleted) do
+  defp pack_bucket(tokens, timer, deleted) do
     tokens <<< (@timer_bits + 1) ||| timer <<< 1 ||| deleted
   end
 
-  def unpack_bucket(atomic) do
+  defp unpack_bucket(atomic) do
     tokens = atomic >>> (@timer_bits + 1)
     timer = atomic >>> 1 &&& (1 <<< @timer_bits) - 1
     deleted = atomic &&& 1
