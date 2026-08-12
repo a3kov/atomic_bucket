@@ -353,7 +353,7 @@ defmodule AtomicBucket do
 
   defp try_create_bucket(bucket, capacity, opts) do
     table = table(opts)
-    bucket_ref = :atomics.new(1, [])
+    bucket_ref = :atomics.new(1, signed: false)
     timer = wrapping_timer()
     atomic = pack_bucket(capacity, timer, 0)
     :atomics.put(bucket_ref, 1, atomic)
@@ -391,21 +391,14 @@ defmodule AtomicBucket do
     if delta >= 0, do: delta, else: delta + @timer_modulus
   end
 
-  defp pack_bucket(tokens, timer, deleted) do
-    <<atomic::signed-integer-size(64)>> =
-      <<tokens::integer-size(@token_bits), timer::integer-size(@timer_bits),
-        deleted::integer-size(1)>>
-
-    atomic
+  def pack_bucket(tokens, timer, deleted) do
+    tokens <<< (@timer_bits + 1) ||| timer <<< 1 ||| deleted
   end
 
-  defp unpack_bucket(atomic) do
-    <<
-      tokens::integer-size(@token_bits),
-      timer::integer-size(@timer_bits),
-      deleted::integer-size(1)
-    >> = <<atomic::signed-integer-size(64)>>
-
+  def unpack_bucket(atomic) do
+    tokens = atomic >>> (@timer_bits + 1)
+    timer = atomic >>> 1 &&& (1 <<< @timer_bits) - 1
+    deleted = atomic &&& 1
     {tokens, timer, deleted}
   end
 
