@@ -249,7 +249,7 @@ defmodule AtomicBucket do
     tokens_after_request = tokens_after_refill - cost
 
     if tokens_after_request >= 0 do
-      new_atomic = pack_bucket(timer, tokens_after_request, 0)
+      new_atomic = pack_bucket(tokens_after_request, timer, 0)
 
       case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
         :ok ->
@@ -275,13 +275,13 @@ defmodule AtomicBucket do
     {verdict, new_tokens, new_atomic} =
       cond do
         tokens_after_request >= 0 ->
-          {:allow, tokens_after_request, pack_bucket(timer, tokens_after_request, 0)}
+          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer, 0)}
 
         tokens_after_refill == tokens ->
           {:deny, tokens, nil}
 
         true ->
-          {:deny, tokens_after_refill, pack_bucket(timer, tokens_after_refill, 0)}
+          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer, 0)}
       end
 
     if new_atomic do
@@ -320,7 +320,7 @@ defmodule AtomicBucket do
     atomic = :atomics.get(bucket_ref, 1)
 
     case unpack_bucket(atomic) do
-      {timer, tokens, 0} ->
+      {tokens, timer, 0} ->
         {bucket_ref, atomic, timer, tokens}
 
       _ ->
@@ -338,7 +338,7 @@ defmodule AtomicBucket do
     table = table(opts)
     bucket_ref = :atomics.new(1, [])
     timer = wrapping_timer()
-    atomic = pack_bucket(timer, capacity, 0)
+    atomic = pack_bucket(capacity, timer, 0)
     :atomics.put(bucket_ref, 1, atomic)
 
     if :ets.insert_new(table, {bucket, bucket_ref}) do
@@ -374,9 +374,9 @@ defmodule AtomicBucket do
     if delta >= 0, do: delta, else: delta + @timer_modulus
   end
 
-  defp pack_bucket(timer, tokens, deleted) do
+  defp pack_bucket(tokens, timer, deleted) do
     <<atomic::signed-integer-size(64)>> =
-      <<timer::integer-size(@timer_bits), tokens::integer-size(@token_bits),
+      <<tokens::integer-size(@token_bits), timer::integer-size(@timer_bits),
         deleted::integer-size(1)>>
 
     atomic
@@ -384,12 +384,12 @@ defmodule AtomicBucket do
 
   defp unpack_bucket(atomic) do
     <<
-      timer::integer-size(@timer_bits),
       tokens::integer-size(@token_bits),
+      timer::integer-size(@timer_bits),
       deleted::integer-size(1)
     >> = <<atomic::signed-integer-size(64)>>
 
-    {timer, tokens, deleted}
+    {tokens, timer, deleted}
   end
 
   @doc """
@@ -457,11 +457,11 @@ defmodule AtomicBucket do
     :ets.foldl(
       fn {bucket, bucket_ref}, acc ->
         atomic = :atomics.get(bucket_ref, 1)
-        {prev_timer, tokens, 0} = unpack_bucket(atomic)
+        {tokens, prev_timer, 0} = unpack_bucket(atomic)
         timer = wrapping_timer()
 
         if wrapping_timer_delta(prev_timer, timer) > max_idle_period do
-          new_atomic = pack_bucket(prev_timer, tokens, 1)
+          new_atomic = pack_bucket(tokens, prev_timer, 1)
 
           case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
             :ok ->
