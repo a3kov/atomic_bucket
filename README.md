@@ -75,9 +75,9 @@ Bucket id can be any term.
 AtomicBucket.request({:client, ip_addr}, 1, 10, 3)
 ```
 
-Cache bucket reference in `:persistent_term` for better performance.
-Good fit for buckets with low churn. Best for fixed buckets like per-user-id
-rate limits. See [:persistent_term docs](https://www.erlang.org/doc/apps/erts/persistent_term.html#content)
+Cache bucket reference in `:persistent_term` for better performance. Works well
+for buckets with low churn. Best for permanent buckets that are never deleted.
+See [:persistent_term docs](https://www.erlang.org/doc/apps/erts/persistent_term.html#content)
 for more info on the tradeoffs.
 ```elixir
 AtomicBucket.request(:mybucket, 1, 10, 3, persistent: true)
