@@ -100,9 +100,16 @@ AtomicBucket.raw_request(:mybucket, 200, 1, 150)
 AtomicBucket.raw_request(:mybucket, 200, 1, -100)
 ```
 
-To implement different retention policies start multiple servers and
-use the table option of `request/5` and `raw_request/5`. Bucket ids are
-table-scoped and don't have to be globally unique.
+To implement different retention policies start multiple servers using different tables
+and use the table option of `request/5` and `raw_request/5`.
+```elixir
+# application.ex
+children = [
+  {AtomicBucket,
+   table: :mytable, cleanup_interval: :timer.minutes(20), max_idle_period: :timer.minutes(10)}
+]
+```
+Bucket ids are table-scoped and don't have to be globally unique.
 
 ## Caveats
 

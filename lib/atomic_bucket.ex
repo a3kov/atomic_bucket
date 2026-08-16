@@ -402,6 +402,13 @@ defmodule AtomicBucket do
     {tokens, timer, deleted}
   end
 
+  def child_spec(init_arg) do
+    %{
+      id: {__MODULE__, Keyword.get(init_arg, :table, __MODULE__)},
+      start: {__MODULE__, :start_link, [init_arg]}
+    }
+  end
+
   @doc """
   Starts the process that manages ETS table for bucket data and
   periodically deletes idle buckets.
