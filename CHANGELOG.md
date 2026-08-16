@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.1 (2026-08-16)
+
+Create unique server id in child spec based on the table for easier inclusion
+of multiple servers in application children.
+
 ## v0.3.0 (2026-08-12)
 
 20-30% performance gain for normal size buckets on 64bit.
