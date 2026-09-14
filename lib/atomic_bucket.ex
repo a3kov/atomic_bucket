@@ -460,7 +460,8 @@ defmodule AtomicBucket do
 
     schedule_cleanup(cleanup_interval)
 
-    {:ok, %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period}}
+    state = %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period}
+    {:ok, state, :hibernate}
   end
 
   defp cleanup_interval(opts), do: Keyword.get(opts, :cleanup_interval, @default_cleanup_interval)
@@ -498,10 +499,10 @@ defmodule AtomicBucket do
 
     schedule_cleanup(cleanup_interval)
 
-    {:noreply, state}
+    {:noreply, state, :hibernate}
   end
 
-  def handle_info(_, state), do: {:noreply, state}
+  def handle_info(_, state), do: {:noreply, state, :hibernate}
 
   defp schedule_cleanup(cleanup_interval) do
     Process.send_after(self(), :cleanup, cleanup_interval)
