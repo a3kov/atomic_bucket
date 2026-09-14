@@ -471,7 +471,7 @@ defmodule AtomicBucket do
   def handle_info(:cleanup, state) do
     %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period} = state
 
-    :ets.foldl(
+    Task.start_link(fn ->
       fn {bucket, bucket_ref}, acc ->
         atomic = :atomics.get(bucket_ref, 1)
         {tokens, prev_timer, 0} = unpack_bucket(atomic)
@@ -492,15 +492,16 @@ defmodule AtomicBucket do
         else
           acc
         end
-      end,
-      0,
-      table
-    )
+      end
+      |> :ets.foldl(0, table)
+    end)
 
     schedule_cleanup(cleanup_interval)
 
     {:noreply, state}
   end
+
+  def handle_info(_, state), do: {:noreply, state}
 
   defp schedule_cleanup(cleanup_interval) do
     Process.send_after(self(), :cleanup, cleanup_interval)
