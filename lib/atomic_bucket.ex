@@ -475,7 +475,7 @@ defmodule AtomicBucket do
 
     # Make sure only 1 task can run at a time.
     Task.async(fn ->
-      fn {bucket, bucket_ref}, acc ->
+      fn {bucket, bucket_ref}, _ ->
         atomic = :atomics.get(bucket_ref, 1)
         {tokens, prev_timer, 0} = unpack_bucket(atomic)
         timer = wrapping_timer()
@@ -483,20 +483,13 @@ defmodule AtomicBucket do
         if wrapping_timer_delta(prev_timer, timer) > max_idle_period do
           new_atomic = pack_bucket(tokens, prev_timer, 1)
 
-          case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-            :ok ->
-              :ets.delete_object(table, {bucket, bucket_ref})
-              :persistent_term.erase(pt_bucket_key(table, bucket))
-              acc + 1
-
-            _ ->
-              acc
+          if :ok == :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+            :ets.delete_object(table, {bucket, bucket_ref})
+            :persistent_term.erase(pt_bucket_key(table, bucket))
           end
-        else
-          acc
         end
       end
-      |> :ets.foldl(0, table)
+      |> :ets.foldl(nil, table)
     end)
     |> Task.await(:infinity)
 
