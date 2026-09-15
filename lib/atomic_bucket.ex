@@ -472,7 +472,8 @@ defmodule AtomicBucket do
   def handle_info(:cleanup, state) do
     %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period} = state
 
-    Task.start_link(fn ->
+    # Make sure only 1 task can run at a time.
+    Task.async(fn ->
       fn {bucket, bucket_ref}, acc ->
         atomic = :atomics.get(bucket_ref, 1)
         {tokens, prev_timer, 0} = unpack_bucket(atomic)
@@ -496,6 +497,7 @@ defmodule AtomicBucket do
       end
       |> :ets.foldl(0, table)
     end)
+    |> Task.await(:infinity)
 
     schedule_cleanup(cleanup_interval)
 
