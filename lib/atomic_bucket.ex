@@ -420,7 +420,8 @@ defmodule AtomicBucket do
 
   In addition to standard GenServer options, accepts the following:
     - `:cleanup_interval` interval in ms defining how often the server will try
-      to delete idle buckets. Default is 1 hour.
+      to delete idle buckets. It is applied on completion of a cleanup.
+      Default is 1 hour.
 
     - `:max_idle_period` max period in ms since last allowed request before
       the bucket is deleted. Default is 24 hours.
