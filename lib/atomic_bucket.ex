@@ -22,6 +22,7 @@ defmodule AtomicBucket do
               try_create_bucket: 3,
               pack_bucket: 3,
               unpack_bucket: 1,
+              bucket_timer: 1,
               wrapping_timer: 0,
               wrapping_timer_delta: 2,
               persistent_bucket?: 1,
@@ -397,9 +398,13 @@ defmodule AtomicBucket do
 
   defp unpack_bucket(atomic) do
     tokens = atomic >>> (@timer_bits + 1)
-    timer = atomic >>> 1 &&& (1 <<< @timer_bits) - 1
+    timer = bucket_timer(atomic)
     deleted = atomic &&& 1
     {tokens, timer, deleted}
+  end
+
+  defp bucket_timer(atomic) do
+    atomic >>> 1 &&& (1 <<< @timer_bits) - 1
   end
 
   def child_spec(init_arg) do
@@ -477,16 +482,13 @@ defmodule AtomicBucket do
     Task.async(fn ->
       fn {bucket, bucket_ref}, _ ->
         atomic = :atomics.get(bucket_ref, 1)
-        {tokens, prev_timer, 0} = unpack_bucket(atomic)
         timer = wrapping_timer()
+        bucket_timer = bucket_timer(atomic)
+        pending? = wrapping_timer_delta(bucket_timer, timer) > max_idle_period
 
-        if wrapping_timer_delta(prev_timer, timer) > max_idle_period do
-          new_atomic = pack_bucket(tokens, prev_timer, 1)
-
-          if :ok == :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-            :ets.delete_object(table, {bucket, bucket_ref})
-            :persistent_term.erase(pt_bucket_key(table, bucket))
-          end
+        if pending? && :ok == :atomics.compare_exchange(bucket_ref, 1, atomic, 1) do
+          :ets.delete_object(table, {bucket, bucket_ref})
+          :persistent_term.erase(pt_bucket_key(table, bucket))
         end
       end
       |> :ets.foldl(nil, table)
