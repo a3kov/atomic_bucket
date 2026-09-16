@@ -186,20 +186,70 @@ defmodule AtomicBucket do
 
   def __unvalidated_request__(bucket, window, requests, burst_requests, opts) do
     {capacity, refill_ms, cost} = fixed_cost_params(window, requests, burst_requests)
-    fixed_cost_request(bucket, capacity, refill_ms, cost, opts)
+    __validated_request__(bucket, capacity, refill_ms, cost, opts)
   end
 
   def __validated_request__(bucket, capacity, refill_ms, cost, opts) do
-    fixed_cost_request(bucket, capacity, refill_ms, cost, opts)
+    timer = wrapping_timer()
+    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
+
+    tokens_after_refill =
+      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
+
+    tokens_after_request = tokens_after_refill - cost
+
+    if tokens_after_request >= 0 do
+      new_atomic = pack_bucket(tokens_after_request, timer)
+
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          {:allow, div(tokens_after_request, cost), bucket_ref}
+
+        _ ->
+          __validated_request__(bucket, capacity, refill_ms, cost, opts)
+      end
+    else
+      {:deny, div(cost - tokens_after_refill, refill_ms), bucket_ref}
+    end
   end
 
   def __unvalidated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
     validate_raw_params!(capacity, refill_ms, cost)
-    raw_params_request(bucket, capacity, refill_ms, cost, opts)
+    __validated_raw_request__(bucket, capacity, refill_ms, cost, opts)
   end
 
   def __validated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
-    raw_params_request(bucket, capacity, refill_ms, cost, opts)
+    timer = wrapping_timer()
+    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
+
+    tokens_after_refill =
+      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
+
+    tokens_after_request = min(capacity, tokens_after_refill - cost)
+
+    {verdict, new_tokens, new_atomic} =
+      cond do
+        tokens_after_request >= 0 ->
+          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer)}
+
+        tokens_after_refill == tokens ->
+          {:deny, tokens, nil}
+
+        true ->
+          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer)}
+      end
+
+    if new_atomic do
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          {verdict, new_tokens, bucket_ref}
+
+        _ ->
+          __validated_raw_request__(bucket, capacity, refill_ms, cost, opts)
+      end
+    else
+      {verdict, new_tokens, bucket_ref}
+    end
   end
 
   defp fixed_cost_params(window, requests, burst_requests) do
@@ -255,64 +305,6 @@ defmodule AtomicBucket do
 
   defp pos_int_arg_error!(name) do
     raise ArgumentError, "Invalid argument: #{name} must be a positive integer."
-  end
-
-  defp fixed_cost_request(bucket, capacity, refill_ms, cost, opts) do
-    timer = wrapping_timer()
-    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
-
-    tokens_after_refill =
-      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
-
-    tokens_after_request = tokens_after_refill - cost
-
-    if tokens_after_request >= 0 do
-      new_atomic = pack_bucket(tokens_after_request, timer)
-
-      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-        :ok ->
-          {:allow, div(tokens_after_request, cost), bucket_ref}
-
-        _ ->
-          fixed_cost_request(bucket, capacity, refill_ms, cost, opts)
-      end
-    else
-      {:deny, div(cost - tokens_after_refill, refill_ms), bucket_ref}
-    end
-  end
-
-  defp raw_params_request(bucket, capacity, refill_ms, cost, opts) do
-    timer = wrapping_timer()
-    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
-
-    tokens_after_refill =
-      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
-
-    tokens_after_request = min(capacity, tokens_after_refill - cost)
-
-    {verdict, new_tokens, new_atomic} =
-      cond do
-        tokens_after_request >= 0 ->
-          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer)}
-
-        tokens_after_refill == tokens ->
-          {:deny, tokens, nil}
-
-        true ->
-          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer)}
-      end
-
-    if new_atomic do
-      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-        :ok ->
-          {verdict, new_tokens, bucket_ref}
-
-        _ ->
-          raw_params_request(bucket, capacity, refill_ms, cost, opts)
-      end
-    else
-      {verdict, new_tokens, bucket_ref}
-    end
   end
 
   defp get_bucket(bucket, capacity, opts) do
