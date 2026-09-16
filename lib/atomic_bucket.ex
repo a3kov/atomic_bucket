@@ -20,7 +20,7 @@ defmodule AtomicBucket do
               get_bucket: 3,
               open_bucket: 4,
               try_create_bucket: 3,
-              pack_bucket: 3,
+              pack_bucket: 2,
               unpack_bucket: 1,
               bucket_timer: 1,
               wrapping_timer: 0,
@@ -267,7 +267,7 @@ defmodule AtomicBucket do
     tokens_after_request = tokens_after_refill - cost
 
     if tokens_after_request >= 0 do
-      new_atomic = pack_bucket(tokens_after_request, timer, 0)
+      new_atomic = pack_bucket(tokens_after_request, timer)
 
       case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
         :ok ->
@@ -293,13 +293,13 @@ defmodule AtomicBucket do
     {verdict, new_tokens, new_atomic} =
       cond do
         tokens_after_request >= 0 ->
-          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer, 0)}
+          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer)}
 
         tokens_after_refill == tokens ->
           {:deny, tokens, nil}
 
         true ->
-          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer, 0)}
+          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer)}
       end
 
     if new_atomic do
@@ -356,7 +356,7 @@ defmodule AtomicBucket do
     table = table(opts)
     bucket_ref = :atomics.new(1, signed: false)
     timer = wrapping_timer()
-    atomic = pack_bucket(capacity, timer, 0)
+    atomic = pack_bucket(capacity, timer)
     :atomics.put(bucket_ref, 1, atomic)
 
     if :ets.insert_new(table, {bucket, bucket_ref}) do
@@ -392,8 +392,8 @@ defmodule AtomicBucket do
     if delta >= 0, do: delta, else: delta + @timer_modulus
   end
 
-  defp pack_bucket(tokens, timer, deleted) do
-    tokens <<< (@timer_bits + 1) ||| timer <<< 1 ||| deleted
+  defp pack_bucket(tokens, timer) do
+    tokens <<< (@timer_bits + 1) ||| timer <<< 1
   end
 
   defp unpack_bucket(atomic) do
