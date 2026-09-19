@@ -13,17 +13,18 @@ defmodule AtomicBucket do
   @timer_modulus 1 <<< @timer_bits
   @default_cleanup_interval :timer.hours(1)
   @default_max_idle_period :timer.hours(24)
-
+  @test_env? Application.compile_env(:atomic_bucket, :test_env, false)
   @compile {:inline,
             [
               validate_raw_params!: 3,
               get_bucket: 3,
               open_bucket: 4,
               try_create_bucket: 3,
-              pack_bucket: 2,
-              unpack_bucket: 1,
+              pack_bucket: 3,
+              unpack_bucket: 2,
               bucket_timer: 1,
               wrapping_timer: 0,
+              get_timer: 1,
               wrapping_timer_delta: 2,
               persistent_bucket?: 1,
               pos_int?: 1,
@@ -31,6 +32,8 @@ defmodule AtomicBucket do
               pt_bucket_key: 2,
               table: 1
             ]}
+
+  @type verdict :: :allow | :deny
 
   @doc """
   Checks if the request is allowed according to desired rate assuming
@@ -106,6 +109,317 @@ defmodule AtomicBucket do
   end
 
   @doc """
+  Checks if the request is allowed according to multiple rate limits.
+  By default fixed request cost is assumed, but variable cost is also
+  supported via cost factor.
+
+  Uses simplified algorithm, where each rate is represented as
+  request interval in milliseconds instead of window and requests.
+  The bucket is updated in a single atomic operation.
+
+  Multiple buckets are initialized in full state. Every request will
+  refill each bucket if needed and check if all buckets have enough
+  tokens to make the request. On success the request tokens are
+  removed from each bucket and the call returns
+  `{:allow, requests, bucket_ref}`, where `requests` is a map with
+  sub-bucket name keys and remaining requests as values. Otherwise,
+  each bucket is left untouched and the call returns
+  `{:deny, results, bucket_ref}`, where `results` is a map with sub-bucket
+  name keys and result tuples (`{:allow, remaining requests}` or
+  `{:deny, timeout}`) as values. Note that remaining requests reflect
+  final number of available requests in the bucket after the call -
+  if the final verdict is "deny", the request tokens are not subtracted.
+  `bucket_ref` is a reference to the bucket atomic.
+
+  The algorithm stores multiple buckets in a single 64bit atomic but
+  has some compromises:
+    - rates resulting in fractional intervals are not supported
+    - some combinations of rates can exceed maximum storage capacity
+
+  If a combination of rates exceeds capacity limit, one could try to
+  increase greatest common divisor (GCD) of the intervals. The smaller
+  the GCD value, the higher is the likelihood of exceeding the limit.
+  Another way to reduce the required capacity is to decrease the bursts.
+
+  For a fractional interval rate users can pick a nearest
+  non-fractional rate. For example, for "3 per second" one could try
+  the following intervals:
+    - 333 or 334 if accuracy is important
+    - 330 for better GCD
+    - 300 for much better GCD
+
+  Arguments:
+    - `bucket_id` any id unique within the bucket table
+    - `sub_buckets` a map describing sub-buckets, with sub-bucket
+      names as keys and `{request interval in milliseconds, burst requests}`
+      tuples as values.
+    - `cost_factor` integer multiplier for the request cost
+
+  Supports same options as `request/5`
+  """
+  @spec multi_request(
+          bucket_id :: any(),
+          sub_buckets :: %{
+            (name :: atom()) => {request_interval :: pos_integer(), burst :: pos_integer()}
+          },
+          cost_factor :: integer(),
+          opts :: keyword()
+        ) ::
+          {:allow, %{(name :: any()) => non_neg_integer()}, :atomics.atomics_ref()}
+          | {:deny, %{(name :: any()) => {verdict(), non_neg_integer()}},
+             :atomics.atomics_ref()}
+
+  defmacro multi_request(bucket_id, sub_buckets, cost_factor \\ 1, opts \\ []) do
+    buckets = Macro.expand(sub_buckets, __CALLER__)
+    cost_factor = Macro.expand(cost_factor, __CALLER__)
+
+    if Macro.quoted_literal?(buckets) && Macro.quoted_literal?(cost_factor) do
+      {:%{}, _, bucket_list} = buckets
+      cost_factor = expand_cf(cost_factor)
+      {buckets, t_interval} = prepare_multi_params(bucket_list, cost_factor)
+      buckets_ast = Enum.map(buckets, fn {k, v} -> {k, Macro.escape(v)} end)
+
+      if cost_factor > 0 do
+        quote do
+          AtomicBucket.__multi_request_pos_cf__(
+            unquote(bucket_id),
+            unquote(buckets_ast),
+            unquote(t_interval),
+            unquote(cost_factor),
+            unquote(opts)
+          )
+        end
+      else
+        quote do
+          AtomicBucket.__multi_request_np_cf__(
+            unquote(bucket_id),
+            unquote(buckets_ast),
+            unquote(t_interval),
+            unquote(cost_factor),
+            unquote(opts)
+          )
+        end
+      end
+    else
+      quote do
+        AtomicBucket.__unvalidated_multi_request__(
+          unquote(bucket_id),
+          unquote(buckets),
+          unquote(cost_factor),
+          unquote(opts)
+        )
+      end
+    end
+  end
+
+  defp expand_cf(i) when is_integer(i), do: i
+  defp expand_cf({:-, _, [i]}) when is_integer(i), do: -i
+
+  defp expand_cf(_) do
+    raise ArgumentError, "Invalid cost_factor argument."
+  end
+
+  defp prepare_multi_params([], _cost_factor) do
+    raise ArgumentError, "Must include at least 1 sub-bucket."
+  end
+
+  defp prepare_multi_params(buckets, cost_factor) do
+    t_interval = token_interval(buckets, nil)
+
+    prepared =
+      prepare_buckets(buckets, 0, t_interval, cost_factor)
+      |> Enum.sort_by(fn {_, {c, _, _}} -> c end)
+
+    {prepared, t_interval}
+  end
+
+  defp token_interval([{_, {interval, _}} | buckets], nil) do
+    if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
+
+    token_interval(buckets, interval)
+  end
+
+  defp token_interval([{_, {interval, _}} | buckets], prev_interval) do
+    if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
+
+    token_interval(buckets, Integer.gcd(interval, prev_interval))
+  end
+
+  defp token_interval([], interval), do: interval
+
+  defp token_interval(_, _) do
+    raise ArgumentError, "Invalid sub_buckets argument."
+  end
+
+  defp prepare_buckets([], _bits_acc, _t_interval, _cf), do: []
+
+  defp prepare_buckets([{name, {req_int, burst}} | buckets], bits_acc, t_int, cf) do
+    if !pos_int?(burst), do: sub_bucket_arg_error!("burst")
+
+    cost = div(req_int, t_int)
+    scaled_cost = scaled_cost(cost, cf)
+    cap = burst * cost
+    bits = floor(:math.log2(cap)) + 1
+    total_bits = bits_acc + bits
+
+    if total_bits > @token_bits do
+      error =
+        """
+        Required multi-bucket capacity (#{total_bits} bits) is above the limit (#{@token_bits}). \
+        Consider increasing GCD of request intervals, reducing bursts or number of sub-buckets.
+        """
+
+      raise ArgumentError, error
+    end
+
+    [{name, {cap, bits, scaled_cost}} | prepare_buckets(buckets, total_bits, t_int, cf)]
+  end
+
+  # Positive cost factor is used as is for the calculcations.
+  # Negative cost factor is used in absolute form, charge changes sign.
+  # Zero cost is converted to 1 for calculations of remaining requests, skipped in charge.
+  # See refill_add_np_cf/4 and allowed_requests_np_cf/4.
+  defp scaled_cost(cost, 0), do: cost
+  defp scaled_cost(cost, cf), do: cost * abs(cf)
+
+  defp sub_bucket_arg_error!(name) do
+    raise ArgumentError, "Invalid sub-bucket parameter: #{name} must be a positive integer."
+  end
+
+  def __unvalidated_multi_request__(id, buckets, cf, opts) do
+    {buckets, t_interval} = Map.to_list(buckets) |> prepare_multi_params(cf)
+
+    if cf > 0 do
+      AtomicBucket.__multi_request_pos_cf__(id, buckets, t_interval, cf, opts)
+    else
+      AtomicBucket.__multi_request_np_cf__(id, buckets, t_interval, cf, opts)
+    end
+  end
+
+  def __multi_request_pos_cf__(id, buckets, t_interval, cf, opts) do
+    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
+    timer = get_timer(opts)
+    elapsed = wrapping_timer_delta(prev_timer, timer)
+    refill = div(elapsed, t_interval)
+    ams_refill = refill_all(ams_old, buckets, refill)
+    ams_request = charge_all(ams_refill, buckets)
+
+    if Enum.all?(ams_request, &(&1 >= 0)) do
+      timer = prev_timer + refill * t_interval
+
+      new_atomic = pack_bucket(ams_request, timer, buckets)
+
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          results = allowed_requests_pos_cf(ams_request, buckets, %{})
+          {:allow, results, bucket_ref}
+
+        _ ->
+          __multi_request_pos_cf__(id, buckets, t_interval, cf, opts)
+      end
+    else
+      results = denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, %{})
+
+      {:deny, results, bucket_ref}
+    end
+  end
+
+  def __multi_request_np_cf__(id, buckets, t_interval, cf, opts) do
+    # Fast path for non-positive cost factor.
+    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
+    timer = get_timer(opts)
+    elapsed = wrapping_timer_delta(prev_timer, timer)
+    refill = div(elapsed, t_interval)
+    ams_request = refill_add_np_cf(ams_old, buckets, refill, cf)
+    timer = prev_timer + refill * t_interval
+    new_atomic = pack_bucket(ams_request, timer, buckets)
+
+    case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+      :ok ->
+        results = allowed_requests_np_cf(ams_request, buckets, cf, %{})
+        {:allow, results, bucket_ref}
+
+      _ ->
+        __multi_request_np_cf__(id, buckets, t_interval, cf, opts)
+    end
+  end
+
+  defp refill_all(amounts, _, 0), do: amounts
+
+  defp refill_all([], [], _refill), do: []
+
+  defp refill_all([tokens | amounts], [{_, {capacity, _, _}} | buckets], refill) do
+    [min(capacity, tokens + refill) | refill_all(amounts, buckets, refill)]
+  end
+
+  defp charge_all([], _buckets), do: []
+
+  defp charge_all([tokens | amounts], [{_, {_, _, cost}} | buckets]) do
+    # Cost here already includes cost factor, applied by prepare_buckets/4.
+    [tokens - cost | charge_all(amounts, buckets)]
+  end
+
+  defp refill_add_np_cf([], [], _refill, _cf), do: []
+
+  defp refill_add_np_cf([tokens | amounts], [{_, {cap, _, _}} | buckets], refill, 0) do
+    # 0 is a special case: use zero cost, while cost parameter of the bucket contains positive cost.
+    # allowed_requests_np_cf/4 reports requests for cf = 1.
+    [min(cap, tokens + refill) | refill_add_np_cf(amounts, buckets, refill, 0)]
+  end
+
+  defp refill_add_np_cf([tokens | amounts], [{_, {cap, _, cost}} | buckets], refill, cf) do
+    # Negative cf is a special case: prepare_buckets/4 makes cost absolute, so we must
+    # change the sign of the operation.
+    [min(cap, tokens + refill + cost) | refill_add_np_cf(amounts, buckets, refill, cf)]
+  end
+
+  defp allowed_requests_pos_cf([], [], acc), do: acc
+
+  defp allowed_requests_pos_cf([tokens | amounts], [{name, {_, _, cost}} | buckets], acc) do
+    acc = Map.put(acc, name, div(tokens, cost))
+    allowed_requests_pos_cf(amounts, buckets, acc)
+  end
+
+  defp allowed_requests_np_cf([], [], _cf, acc), do: acc
+
+  defp allowed_requests_np_cf([tokens | amounts], [{name, {_, _, cost}} | buckets], 0, acc) do
+    # 0 is a special case: return value for cf = 1, prepare_buckets/4 keeps original cost.
+    acc = Map.put(acc, name, div(tokens, cost))
+    allowed_requests_np_cf(amounts, buckets, 0, acc)
+  end
+
+  defp allowed_requests_np_cf([tokens | amounts], [{name, {_, _, cost}} | buckets], cf, acc) do
+    # Negative cf is a special case: prepare_buckets/4 applies absolute cf.
+    acc = Map.put(acc, name, div(tokens, cost))
+    allowed_requests_np_cf(amounts, buckets, cf, acc)
+  end
+
+  defp denied_requests([], [], [], [], _t_interval, _elapsed, acc), do: acc
+
+  defp denied_requests(
+         [t_old | ams_old],
+         [t_refill | ams_refill],
+         [t_request | ams_request],
+         [{name, {_, _, cost}} | buckets],
+         t_interval,
+         elapsed,
+         acc
+       ) do
+    # Cost here already includes (positive) cost factor, applied by prepare_buckets/4.
+    result =
+      if t_request >= 0 do
+        # Positive verdict here doesn't mean we subtract the amount.
+        {:allow, div(t_refill, cost)}
+      else
+        {:deny, (cost - t_old) * t_interval - elapsed}
+      end
+
+    acc = Map.put(acc, name, result)
+
+    denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, acc)
+  end
+
+  @doc """
   Checks if the request is allowed according to bucket parameters.
 
   Differences from `request/5`:
@@ -136,7 +450,7 @@ defmodule AtomicBucket do
           refill_ms :: pos_integer(),
           cost :: integer(),
           opts :: keyword()
-        ) :: {:allow | :deny, tokens :: non_neg_integer(), :atomics.atomics_ref()}
+        ) :: {verdict(), tokens :: non_neg_integer(), :atomics.atomics_ref()}
 
   defmacro raw_request(bucket, capacity, refill_ms, cost, opts \\ []) do
     with {:ok, cap_int} <- expand_int(capacity, "capacity", __CALLER__, true),
@@ -199,7 +513,7 @@ defmodule AtomicBucket do
     tokens_after_request = tokens_after_refill - cost
 
     if tokens_after_request >= 0 do
-      new_atomic = pack_bucket(tokens_after_request, timer)
+      new_atomic = pack_bucket(tokens_after_request, timer, capacity)
 
       case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
         :ok ->
@@ -230,13 +544,13 @@ defmodule AtomicBucket do
     {verdict, new_tokens, new_atomic} =
       cond do
         tokens_after_request >= 0 ->
-          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer)}
+          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer, capacity)}
 
         tokens_after_refill == tokens ->
           {:deny, tokens, nil}
 
         true ->
-          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer)}
+          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer, capacity)}
       end
 
     if new_atomic do
@@ -307,29 +621,29 @@ defmodule AtomicBucket do
     raise ArgumentError, "Invalid argument: #{name} must be a positive integer."
   end
 
-  defp get_bucket(bucket, capacity, opts) do
+  defp get_bucket(bucket_id, capacity_info, opts) do
     cond do
       bucket_ref = Keyword.get(opts, :ref) ->
-        open_bucket(bucket_ref, bucket, capacity, opts)
+        open_bucket(bucket_ref, bucket_id, capacity_info, opts)
 
-      bucket_ref = persistent_bucket?(opts) && pt_get(bucket, opts) ->
-        open_bucket(bucket_ref, bucket, capacity, opts)
+      bucket_ref = persistent_bucket?(opts) && pt_get(bucket_id, opts) ->
+        open_bucket(bucket_ref, bucket_id, capacity_info, opts)
 
       true ->
-        case :ets.lookup(table(opts), bucket) do
+        case :ets.lookup(table(opts), bucket_id) do
           [{_, bucket_ref}] ->
-            open_bucket(bucket_ref, bucket, capacity, opts)
+            open_bucket(bucket_ref, bucket_id, capacity_info, opts)
 
           [] ->
-            try_create_bucket(bucket, capacity, opts)
+            try_create_bucket(bucket_id, capacity_info, opts)
         end
     end
   end
 
-  defp open_bucket(bucket_ref, bucket, capacity, opts) do
+  defp open_bucket(bucket_ref, bucket_id, capacity_info, opts) do
     atomic = :atomics.get(bucket_ref, 1)
 
-    case unpack_bucket(atomic) do
+    case unpack_bucket(atomic, capacity_info) do
       {tokens, timer, 0} ->
         {bucket_ref, atomic, timer, tokens}
 
@@ -340,15 +654,16 @@ defmodule AtomicBucket do
         # We make sure this is not a reference passed via options, so that
         # we don't get stuck in infinite loop.
         opts = Keyword.drop(opts, [:ref])
-        get_bucket(bucket, capacity, opts)
+        get_bucket(bucket_id, capacity_info, opts)
     end
   end
 
-  defp try_create_bucket(bucket, capacity, opts) do
+  defp try_create_bucket(bucket, capacity_info, opts) do
     table = table(opts)
     bucket_ref = :atomics.new(1, signed: false)
-    timer = wrapping_timer()
-    atomic = pack_bucket(capacity, timer)
+    timer = get_timer(opts)
+    tokens = new_bucket_tokens(capacity_info)
+    atomic = pack_bucket(tokens, timer, capacity_info)
     :atomics.put(bucket_ref, 1, atomic)
 
     if :ets.insert_new(table, {bucket, bucket_ref}) do
@@ -356,9 +671,9 @@ defmodule AtomicBucket do
         :persistent_term.put(pt_bucket_key(table, bucket), bucket_ref)
       end
 
-      {bucket_ref, atomic, timer, capacity}
+      {bucket_ref, atomic, timer, tokens}
     else
-      get_bucket(bucket, capacity, opts)
+      get_bucket(bucket, capacity_info, opts)
     end
   end
 
@@ -374,6 +689,16 @@ defmodule AtomicBucket do
 
   defp pt_bucket_key(table, bucket), do: {__MODULE__, table, bucket}
 
+  if @test_env? do
+    defp get_timer(opts) do
+      Keyword.get(opts, :timer) || wrapping_timer()
+    end
+  else
+    defp get_timer(_opts) do
+      wrapping_timer()
+    end
+  end
+
   defp wrapping_timer() do
     rem = rem(System.monotonic_time(:millisecond), @timer_modulus)
     if rem < 0, do: rem + @timer_modulus, else: rem
@@ -384,15 +709,50 @@ defmodule AtomicBucket do
     if delta >= 0, do: delta, else: delta + @timer_modulus
   end
 
-  defp pack_bucket(tokens, timer) do
+  defp new_bucket_tokens(capacity) when is_integer(capacity) do
+    capacity
+  end
+
+  defp new_bucket_tokens(buckets) do
+    Enum.map(buckets, fn {_, {c, _, _}} -> c end)
+  end
+
+  defp pack_bucket(tokens, timer, _capacity) when is_integer(tokens) do
     tokens <<< (@timer_bits + 1) ||| timer <<< 1
   end
 
-  defp unpack_bucket(atomic) do
+  defp pack_bucket(checked_amounts, timer, buckets) do
+    pack_tokens(checked_amounts, buckets, timer <<< 1, @timer_bits + 1)
+  end
+
+  defp pack_tokens([], [], value, _shift), do: value
+
+  defp pack_tokens([tokens | amounts], [{_, {_, bits, _}} | buckets], value, shift) do
+    pack_tokens(amounts, buckets, tokens <<< shift ||| value, shift + bits)
+  end
+
+  defp unpack_bucket(atomic, capacity) when is_integer(capacity) do
     tokens = atomic >>> (@timer_bits + 1)
     timer = bucket_timer(atomic)
     deleted = atomic &&& 1
     {tokens, timer, deleted}
+  end
+
+  defp unpack_bucket(atomic, buckets) do
+    deleted = atomic &&& 1
+    tokens_timer = atomic >>> 1
+    timer = tokens_timer &&& (1 <<< @timer_bits) - 1
+    amounts = unpack_tokens(tokens_timer, buckets, [], @timer_bits)
+
+    {amounts, timer, deleted}
+  end
+
+  defp unpack_tokens(_atomic, [], amounts, _shift), do: amounts
+
+  defp unpack_tokens(atomic, [{_, {_, bits, _}} | buckets], amounts, shift) do
+    shifted = atomic >>> shift
+    value = shifted &&& (1 <<< bits) - 1
+    [value | unpack_tokens(shifted, buckets, amounts, bits)]
   end
 
   defp bucket_timer(atomic) do
@@ -420,10 +780,10 @@ defmodule AtomicBucket do
       to delete idle buckets. It is applied on completion of a cleanup.
       Default is 1 hour.
 
-    - `:max_idle_period` max period in ms since last allowed request before
-      the bucket is deleted. Default is 24 hours.
+    - `:max_idle_period` max period in ms since last bucket update before
+      it is deleted. Default is 24 hours.
 
-    - `table` ETS table name atom. Default is AtomicBucket.
+    - `:table` ETS table name atom. Default is AtomicBucket.
   """
   def start_link(opts) do
     {gen_opts, opts} =
