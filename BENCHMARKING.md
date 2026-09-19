@@ -36,6 +36,10 @@ In general, such benchmarks should be taken with a grain of salt:
 - Tradeoffs are important. It's better to look at the overall picture, rather
   than raw performance.
 
+This benchmark suite, in particular, is heavily biased towards DoS attack 
+scenarios, where the vast majority of requests are denied, and doesn't model
+realistic concurrent access.
+
 ## Example results
 
 The following results were collected on Intel i7-13700K, Elixir 1.20, Erlang 29.
