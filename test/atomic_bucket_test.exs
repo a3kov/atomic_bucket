@@ -10,11 +10,13 @@ defmodule AtomicBucketTest do
     hour: {36000, 5}
   }
 
-  setup do
+  setup_all do
     {:ok, pid} = AtomicBucket.start_link([])
 
     on_exit(:kill_server, fn -> Process.exit(pid, :test_end) end)
+  end
 
+  setup do
     %{bucket_id: :erlang.unique_integer([:positive])}
   end
 
@@ -67,7 +69,7 @@ defmodule AtomicBucketTest do
 
   describe "bucket server" do
     test "cleanup_interval works", %{bucket_id: bucket_id} do
-      table = :test_table
+      table = :"atomic_bucket#{bucket_id}"
       {:ok, pid} = AtomicBucket.start_link(table: table, cleanup_interval: 10, max_idle_period: 1)
       {:allow, _, bucket_ref} = AtomicBucket.request(bucket_id, 1, 10, 1, table: table)
       assert [{^bucket_id, ^bucket_ref}] = :ets.lookup(table, bucket_id)
@@ -77,7 +79,7 @@ defmodule AtomicBucketTest do
     end
 
     test "persistent bucket cleanup_interval works", %{bucket_id: bucket_id} do
-      table = :test_table
+      table = :"atomic_bucket#{bucket_id}"
       {:ok, pid} = AtomicBucket.start_link(table: table, cleanup_interval: 10, max_idle_period: 1)
 
       {:allow, _, bucket_ref} =
@@ -92,7 +94,7 @@ defmodule AtomicBucketTest do
     end
 
     test "max_idle_period works", %{bucket_id: bucket_id} do
-      table = :test_table
+      table = :"atomic_bucket#{bucket_id}"
 
       {:ok, pid} =
         AtomicBucket.start_link(table: table, cleanup_interval: 10, max_idle_period: 20)
@@ -107,7 +109,7 @@ defmodule AtomicBucketTest do
     end
 
     test "persistent bucket max_idle_period works", %{bucket_id: bucket_id} do
-      table = :test_table
+      table = :"atomic_bucket#{bucket_id}"
 
       {:ok, pid} =
         AtomicBucket.start_link(table: table, cleanup_interval: 10, max_idle_period: 20)
@@ -127,8 +129,8 @@ defmodule AtomicBucketTest do
     end
 
     test "buckets are table-scoped", %{bucket_id: bucket_id} do
-      table1 = :test_table1
-      table2 = :test_table2
+      table1 = :"atomic_bucket#{bucket_id}1"
+      table2 = :"atomic_bucket#{bucket_id}2"
 
       {:ok, pid1} =
         AtomicBucket.start_link(table: table1, cleanup_interval: 10, max_idle_period: 1)
