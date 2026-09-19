@@ -108,6 +108,62 @@ defmodule AtomicBucket do
     end
   end
 
+  def __unvalidated_request__(bucket, window, requests, burst_requests, opts) do
+    {capacity, refill_ms, cost} = fixed_cost_params(window, requests, burst_requests)
+    __validated_request__(bucket, capacity, refill_ms, cost, opts)
+  end
+
+  def __validated_request__(bucket, capacity, refill_ms, cost, opts) do
+    timer = wrapping_timer()
+    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
+
+    tokens_after_refill =
+      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
+
+    tokens_after_request = tokens_after_refill - cost
+
+    if tokens_after_request >= 0 do
+      new_atomic = pack_bucket(tokens_after_request, timer, capacity)
+
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          {:allow, div(tokens_after_request, cost), bucket_ref}
+
+        _ ->
+          __validated_request__(bucket, capacity, refill_ms, cost, opts)
+      end
+    else
+      {:deny, div(cost - tokens_after_refill, refill_ms), bucket_ref}
+    end
+  end
+
+  defp fixed_cost_params(window, requests, burst_requests) do
+    if !pos_int?(window), do: pos_int_arg_error!("window")
+    if !pos_int?(requests), do: pos_int_arg_error!("window_requests")
+    if !pos_int?(burst_requests), do: pos_int_arg_error!("burst_requests")
+
+    if window > @max_window do
+      raise ArgumentError, "Window is above the limit (#{@max_window})."
+    end
+
+    window_ms = window * 1000
+    cost = div(window_ms, Integer.gcd(requests, window_ms))
+    refill = div(requests * cost, window_ms)
+    capacity = burst_requests * cost
+
+    if capacity > @max_capacity do
+      error =
+        """
+        Required bucket capacity (#{capacity}) is above the limit (#{@max_capacity}). \
+        Consider adjusting window size, requests or burst requests.
+        """
+
+      raise ArgumentError, error
+    end
+
+    {capacity, refill, cost}
+  end
+
   @doc """
   Checks if the request is allowed according to multiple rate limits.
   By default fixed request cost is assumed, but variable cost is also
@@ -481,52 +537,6 @@ defmodule AtomicBucket do
     end
   end
 
-  defp expand_int(ast, name, env, pos? \\ false) do
-    case Macro.expand(ast, env) do
-      i when is_integer(i) ->
-        {:ok, i}
-
-      {:-, _, [i]} when is_integer(i) ->
-        if pos?, do: pos_int_arg_error!(name), else: {:ok, i}
-
-      other ->
-        if Macro.quoted_literal?(other) do
-          if pos?, do: pos_int_arg_error!(name), else: int_arg_error!(name)
-        else
-          :error
-        end
-    end
-  end
-
-  def __unvalidated_request__(bucket, window, requests, burst_requests, opts) do
-    {capacity, refill_ms, cost} = fixed_cost_params(window, requests, burst_requests)
-    __validated_request__(bucket, capacity, refill_ms, cost, opts)
-  end
-
-  def __validated_request__(bucket, capacity, refill_ms, cost, opts) do
-    timer = wrapping_timer()
-    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
-
-    tokens_after_refill =
-      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
-
-    tokens_after_request = tokens_after_refill - cost
-
-    if tokens_after_request >= 0 do
-      new_atomic = pack_bucket(tokens_after_request, timer, capacity)
-
-      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-        :ok ->
-          {:allow, div(tokens_after_request, cost), bucket_ref}
-
-        _ ->
-          __validated_request__(bucket, capacity, refill_ms, cost, opts)
-      end
-    else
-      {:deny, div(cost - tokens_after_refill, refill_ms), bucket_ref}
-    end
-  end
-
   def __unvalidated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
     validate_raw_params!(capacity, refill_ms, cost)
     __validated_raw_request__(bucket, capacity, refill_ms, cost, opts)
@@ -566,33 +576,6 @@ defmodule AtomicBucket do
     end
   end
 
-  defp fixed_cost_params(window, requests, burst_requests) do
-    if !pos_int?(window), do: pos_int_arg_error!("window")
-    if !pos_int?(requests), do: pos_int_arg_error!("window_requests")
-    if !pos_int?(burst_requests), do: pos_int_arg_error!("burst_requests")
-
-    if window > @max_window do
-      raise ArgumentError, "Window is above the limit (#{@max_window})."
-    end
-
-    window_ms = window * 1000
-    cost = div(window_ms, Integer.gcd(requests, window_ms))
-    refill = div(requests * cost, window_ms)
-    capacity = burst_requests * cost
-
-    if capacity > @max_capacity do
-      error =
-        """
-        Required bucket capacity (#{capacity}) is above the limit (#{@max_capacity}). \
-        Consider adjusting window size, requests or burst requests.
-        """
-
-      raise ArgumentError, error
-    end
-
-    {capacity, refill, cost}
-  end
-
   defp validate_raw_params!(capacity, refill_ms, cost) do
     if !pos_int?(capacity), do: pos_int_arg_error!("capacity")
     if !pos_int?(refill_ms), do: pos_int_arg_error!("refill_ms")
@@ -608,6 +591,23 @@ defmodule AtomicBucket do
 
     if abs(cost) > capacity do
       raise ArgumentError, "cost can't exceed capacity."
+    end
+  end
+
+  defp expand_int(ast, name, env, pos? \\ false) do
+    case Macro.expand(ast, env) do
+      i when is_integer(i) ->
+        {:ok, i}
+
+      {:-, _, [i]} when is_integer(i) ->
+        if pos?, do: pos_int_arg_error!(name), else: {:ok, i}
+
+      other ->
+        if Macro.quoted_literal?(other) do
+          if pos?, do: pos_int_arg_error!(name), else: int_arg_error!(name)
+        else
+          :error
+        end
     end
   end
 
