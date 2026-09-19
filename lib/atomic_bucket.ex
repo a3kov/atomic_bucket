@@ -478,11 +478,7 @@ defmodule AtomicBucket do
   @doc """
   Checks if the request is allowed according to bucket parameters.
 
-  Differences from `request/5`:
-    - direct control of bucket parameters with support for variable
-      (including zero and negative) cost
-    - because of token accounting refills the bucket on every call (eager
-      refill), while `request/5` skips it for denied requests (lazy refill)
+  Supports variable (including zero and negative) cost.
 
   The bucket is initialized in full state. Every request will refill
   the bucket if needed and check if the new token amount with the cost applied
@@ -545,34 +541,22 @@ defmodule AtomicBucket do
   def __validated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
     timer = get_timer(opts)
     {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
-
-    tokens_after_refill =
-      min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
-
+    elapsed = wrapping_timer_delta(prev_timer, timer)
+    tokens_after_refill = min(capacity, tokens + refill_ms * elapsed)
     tokens_after_request = min(capacity, tokens_after_refill - cost)
 
-    {verdict, new_tokens, new_atomic} =
-      cond do
-        tokens_after_request >= 0 ->
-          {:allow, tokens_after_request, pack_bucket(tokens_after_request, timer, capacity)}
+    if tokens_after_request >= 0 do
+      new_atomic = pack_bucket(tokens_after_request, timer, capacity)
 
-        tokens_after_refill == tokens ->
-          {:deny, tokens, nil}
-
-        true ->
-          {:deny, tokens_after_refill, pack_bucket(tokens_after_refill, timer, capacity)}
-      end
-
-    if new_atomic do
       case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
         :ok ->
-          {verdict, new_tokens, bucket_ref}
+          {:allow, tokens_after_request, bucket_ref}
 
         _ ->
           __validated_raw_request__(bucket, capacity, refill_ms, cost, opts)
       end
     else
-      {verdict, new_tokens, bucket_ref}
+      {:deny, tokens_after_refill, bucket_ref}
     end
   end
 
