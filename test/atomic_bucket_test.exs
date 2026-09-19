@@ -27,12 +27,10 @@ defmodule AtomicBucketTest do
     end
 
     test "request limits the rate", %{bucket_id: bucket_id} do
-      assert {:allow, 0, _} = AtomicBucket.request(bucket_id, 1, 10, 1)
-      assert {:deny, _, _} = AtomicBucket.request(bucket_id, 1, 10, 1)
-      Process.sleep(90)
-      assert {:deny, _, _} = AtomicBucket.request(bucket_id, 1, 10, 1)
-      Process.sleep(10)
-      assert {:allow, 0, _} = AtomicBucket.request(bucket_id, 1, 10, 1)
+      assert {:allow, 0, _} = AtomicBucket.request(bucket_id, 1, 10, 1, timer: 0)
+      assert {:deny, _, _} = AtomicBucket.request(bucket_id, 1, 10, 1, timer: 0)
+      assert {:deny, _, _} = AtomicBucket.request(bucket_id, 1, 10, 1, timer: 99)
+      assert {:allow, 0, _} = AtomicBucket.request(bucket_id, 1, 10, 1, timer: 100)
     end
 
     test "with persistent bucket works", %{bucket_id: bucket_id} do
@@ -164,14 +162,10 @@ defmodule AtomicBucketTest do
 
     test "limits the rate", %{bucket_id: bucket_id} do
       # 10 req/s, burst=1
+      assert {:allow, 0, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100, timer: 0)
+      assert {:deny, 0, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100, timer: 0)
+      assert {:deny, 99, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100, timer: 99)
       assert {:allow, 0, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100)
-      assert {:deny, 0, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100)
-      Process.sleep(90)
-      {verdict, amount, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100)
-      assert verdict == :deny
-      assert is_integer(amount) and amount > 0
-      Process.sleep(10)
-      assert {:allow, _, _} = AtomicBucket.raw_request(bucket_id, 100, 1, 100)
     end
 
     test "supports negative and variable cost", %{bucket_id: bucket_id} do

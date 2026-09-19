@@ -114,7 +114,7 @@ defmodule AtomicBucket do
   end
 
   def __validated_request__(bucket, capacity, refill_ms, cost, opts) do
-    timer = wrapping_timer()
+    timer = get_timer(opts)
     {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
 
     tokens_after_refill =
@@ -543,7 +543,7 @@ defmodule AtomicBucket do
   end
 
   def __validated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
-    timer = wrapping_timer()
+    timer = get_timer(opts)
     {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
 
     tokens_after_refill =
