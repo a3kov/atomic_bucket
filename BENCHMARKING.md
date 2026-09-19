@@ -1,17 +1,23 @@
 # Benchmarking
 
-The included benchmark (`bench/benchmark.exs`) measures series of 1000 rate
-limit checks. It serves as an illustration of available options. Run it like so:
+The included benchmark suite measures series of 1000 rate limit checks. It
+serves as an illustration of available options. Run it like so:
+
 ```shell
-mix run bench/benchmark.exs
+mix run bench/request.exs
+mix run bench/raw_request.exs
+mix run bench/multi_request.exs
 ```
 
-There are 2 bucket types in the benchmark: normal size and monster size. Normal
-size has numbers typical for rate limiters, and monster size has extreme parameters,
-unlikely to be used by anyone. Monster buckets take a big performance hit
-because of the way big integers are implemented in BEAM. 32bit architectures
-will take a similar hit even with normal-sized buckets - for our purposes all
-integers on 32bit are "big".
+There are 2 bucket sizes in the benchmarks: small and big, depending on the 
+required atomic integer. For request and raw_request small size means numbers
+typical for rate limiters, and big size is called "monster" because it has
+extreme parameters, unlikely to be used by anyone. On the other hand,
+multi_request can easily reach big atomic size with 3 or more sub-buckets.
+
+Big buckets take a significant performance hit because of the way big
+integers are implemented in BEAM. 32bit architectures take a similar hit with
+all types of buckets - for our purposes all integers on 32bit are "big".
 
 In general, such benchmarks should be taken with a grain of salt:
 
