@@ -194,7 +194,7 @@ Zero and negative cost factor are special cases:
 
 ```elixir
 # Initialize multi-bucket for future use, or peek inside existing multi-bucket.
-{:allow, requests, _} = AtomicBucket.multi_request(:mybucket, @sub_buckets, 0)
+{:allow, _} = AtomicBucket.multi_request(:mybucket, @sub_buckets, 0)
 
 # Refund all sub-buckets with token amounts equal to 1 request.
 AtomicBucket.multi_request(:mybucket, @sub_buckets, -1)
