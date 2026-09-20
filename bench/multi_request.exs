@@ -19,21 +19,21 @@ Benchee.run(
     "multi_request (literals, reusing ref)" => {
       fn
         %{size: :small2, bucket_id: id} ->
-          {_, _, ref} = multi_request(id, buckets(:small2))
+          {_, ref} = multi_request(id, buckets(:small2))
 
           for _ <- 1..(iter_requests() - 1) do
             multi_request(id, buckets(:small2), 1, ref: ref)
           end
 
         %{size: :small3, bucket_id: id} ->
-          {_, _, ref} = multi_request(id, buckets(:small3))
+          {_, ref} = multi_request(id, buckets(:small3))
 
           for _ <- 1..(iter_requests() - 1) do
             multi_request(id, buckets(:small3), 1, ref: ref)
           end
 
         %{size: :big3, bucket_id: id} ->
-          {_, _, ref} = multi_request(id, buckets(:big3))
+          {_, ref} = multi_request(id, buckets(:big3))
 
           for _ <- 1..(iter_requests() - 1) do
             multi_request(id, buckets(:big3), 1, ref: ref)
@@ -60,6 +60,25 @@ Benchee.run(
       end,
       before_scenario: &put_unique_bucket_id/1
     },
+    "multi_request (literals, details)" => {
+      fn
+        %{size: :small2, bucket_id: id} ->
+          for _ <- 1..iter_requests() do
+            multi_request(id, buckets(:small2), 1, details: true)
+          end
+
+        %{size: :small3, bucket_id: id} ->
+          for _ <- 1..iter_requests() do
+            multi_request(id, buckets(:small3), 1, details: true)
+          end
+
+        %{size: :big3, bucket_id: id} ->
+          for _ <- 1..iter_requests() do
+            multi_request(id, buckets(:big3), 1, details: true)
+          end
+      end,
+      before_scenario: &put_unique_bucket_id/1
+    },
     "multi_request (literals, default opts)" => {
       fn
         %{size: :small2, bucket_id: id} ->
@@ -81,7 +100,7 @@ Benchee.run(
     },
     "multi_request (non-literals, reusing ref)" => {
       fn %{bucket_id: bucket_id, buckets: buckets} ->
-        {_, _, ref} = multi_request(bucket_id, buckets)
+        {_, ref} = multi_request(bucket_id, buckets)
 
         for _ <- 1..(iter_requests() - 1) do
           multi_request(bucket_id, buckets, 1, ref: ref)
@@ -93,6 +112,14 @@ Benchee.run(
       fn %{bucket_id: bucket_id, buckets: buckets} ->
         for _ <- 1..iter_requests() do
           multi_request(bucket_id, buckets, 1, persistent: true)
+        end
+      end,
+      before_scenario: &put_unique_bucket_id/1
+    },
+    "multi_request (non-literals, details)" => {
+      fn %{bucket_id: bucket_id, buckets: buckets} ->
+        for _ <- 1..iter_requests() do
+          multi_request(bucket_id, buckets, 1, details: true)
         end
       end,
       before_scenario: &put_unique_bucket_id/1

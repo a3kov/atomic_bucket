@@ -11,6 +11,7 @@ defmodule AtomicBucket do
   @max_window div(1 <<< 31, 1000)
   @max_capacity (1 <<< @token_bits) - 1
   @timer_modulus 1 <<< @timer_bits
+  @detault_multi_details? false
   @default_cleanup_interval :timer.hours(1)
   @default_max_idle_period :timer.hours(24)
   @test_env? Application.compile_env(:atomic_bucket, :test_env, false)
@@ -165,317 +166,6 @@ defmodule AtomicBucket do
   end
 
   @doc """
-  Checks if the request is allowed according to multiple rate limits.
-  By default fixed request cost is assumed, but variable cost is also
-  supported via cost factor.
-
-  Uses simplified algorithm, where each rate is represented as
-  request interval in milliseconds instead of window and requests.
-  The bucket is updated in a single atomic operation.
-
-  Multiple buckets are initialized in full state. Every request will
-  refill each bucket if needed and check if all buckets have enough
-  tokens to make the request. On success the request tokens are
-  removed from each bucket and the call returns
-  `{:allow, requests, bucket_ref}`, where `requests` is a map with
-  sub-bucket name keys and remaining requests as values. Otherwise,
-  each bucket is left untouched and the call returns
-  `{:deny, results, bucket_ref}`, where `results` is a map with sub-bucket
-  name keys and result tuples (`{:allow, remaining requests}` or
-  `{:deny, timeout}`) as values. Note that remaining requests reflect
-  final number of available requests in the bucket after the call -
-  if the final verdict is "deny", the request tokens are not subtracted.
-  `bucket_ref` is a reference to the bucket atomic.
-
-  The algorithm stores multiple buckets in a single 64bit atomic but
-  has some compromises:
-    - rates resulting in fractional intervals are not supported
-    - some combinations of rates can exceed maximum storage capacity
-
-  If a combination of rates exceeds capacity limit, one could try to
-  increase greatest common divisor (GCD) of the intervals. The smaller
-  the GCD value, the higher is the likelihood of exceeding the limit.
-  Another way to reduce the required capacity is to decrease the bursts.
-
-  For a fractional interval rate users can pick a nearest
-  non-fractional rate. For example, for "3 per second" one could try
-  the following intervals:
-    - 333 or 334 if accuracy is important
-    - 330 for better GCD
-    - 300 for much better GCD
-
-  Arguments:
-    - `bucket_id` any id unique within the bucket table
-    - `sub_buckets` a map describing sub-buckets, with sub-bucket
-      names as keys and `{request interval in milliseconds, burst requests}`
-      tuples as values.
-    - `cost_factor` integer multiplier for the request cost
-
-  Supports same options as `request/5`
-  """
-  @spec multi_request(
-          bucket_id :: any(),
-          sub_buckets :: %{
-            (name :: atom()) => {request_interval :: pos_integer(), burst :: pos_integer()}
-          },
-          cost_factor :: integer(),
-          opts :: keyword()
-        ) ::
-          {:allow, %{(name :: any()) => non_neg_integer()}, :atomics.atomics_ref()}
-          | {:deny, %{(name :: any()) => {verdict(), non_neg_integer()}},
-             :atomics.atomics_ref()}
-
-  defmacro multi_request(bucket_id, sub_buckets, cost_factor \\ 1, opts \\ []) do
-    buckets = Macro.expand(sub_buckets, __CALLER__)
-    cost_factor = Macro.expand(cost_factor, __CALLER__)
-
-    if Macro.quoted_literal?(buckets) && Macro.quoted_literal?(cost_factor) do
-      {:%{}, _, bucket_list} = buckets
-      cost_factor = expand_cf(cost_factor)
-      {buckets, t_interval} = prepare_multi_params(bucket_list, cost_factor)
-      buckets_ast = Enum.map(buckets, fn {k, v} -> {k, Macro.escape(v)} end)
-
-      if cost_factor > 0 do
-        quote do
-          AtomicBucket.__multi_request_pos_cf__(
-            unquote(bucket_id),
-            unquote(buckets_ast),
-            unquote(t_interval),
-            unquote(cost_factor),
-            unquote(opts)
-          )
-        end
-      else
-        quote do
-          AtomicBucket.__multi_request_np_cf__(
-            unquote(bucket_id),
-            unquote(buckets_ast),
-            unquote(t_interval),
-            unquote(cost_factor),
-            unquote(opts)
-          )
-        end
-      end
-    else
-      quote do
-        AtomicBucket.__unvalidated_multi_request__(
-          unquote(bucket_id),
-          unquote(buckets),
-          unquote(cost_factor),
-          unquote(opts)
-        )
-      end
-    end
-  end
-
-  defp expand_cf(i) when is_integer(i), do: i
-  defp expand_cf({:-, _, [i]}) when is_integer(i), do: -i
-
-  defp expand_cf(_) do
-    raise ArgumentError, "Invalid cost_factor argument."
-  end
-
-  defp prepare_multi_params([], _cost_factor) do
-    raise ArgumentError, "Must include at least 1 sub-bucket."
-  end
-
-  defp prepare_multi_params(buckets, cost_factor) do
-    t_interval = token_interval(buckets, nil)
-
-    prepared =
-      prepare_buckets(buckets, 0, t_interval, cost_factor)
-      |> Enum.sort_by(fn {_, {c, _, _}} -> c end)
-
-    {prepared, t_interval}
-  end
-
-  defp token_interval([{_, {interval, _}} | buckets], nil) do
-    if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
-
-    token_interval(buckets, interval)
-  end
-
-  defp token_interval([{_, {interval, _}} | buckets], prev_interval) do
-    if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
-
-    token_interval(buckets, Integer.gcd(interval, prev_interval))
-  end
-
-  defp token_interval([], interval), do: interval
-
-  defp token_interval(_, _) do
-    raise ArgumentError, "Invalid sub_buckets argument."
-  end
-
-  defp prepare_buckets([], _bits_acc, _t_interval, _cf), do: []
-
-  defp prepare_buckets([{name, {req_int, burst}} | buckets], bits_acc, t_int, cf) do
-    if !pos_int?(burst), do: sub_bucket_arg_error!("burst")
-
-    cost = div(req_int, t_int)
-    scaled_cost = scaled_cost(cost, cf)
-    cap = burst * cost
-    bits = floor(:math.log2(cap)) + 1
-    total_bits = bits_acc + bits
-
-    if total_bits > @token_bits do
-      error =
-        """
-        Required multi-bucket capacity (#{total_bits} bits) is above the limit (#{@token_bits}). \
-        Consider increasing GCD of request intervals, reducing bursts or number of sub-buckets.
-        """
-
-      raise ArgumentError, error
-    end
-
-    [{name, {cap, bits, scaled_cost}} | prepare_buckets(buckets, total_bits, t_int, cf)]
-  end
-
-  # Positive cost factor is used as is for the calculcations.
-  # Negative cost factor is used in absolute form, charge changes sign.
-  # Zero cost is converted to 1 for calculations of remaining requests, skipped in charge.
-  # See refill_add_np_cf/4 and allowed_requests_np_cf/4.
-  defp scaled_cost(cost, 0), do: cost
-  defp scaled_cost(cost, cf), do: cost * abs(cf)
-
-  defp sub_bucket_arg_error!(name) do
-    raise ArgumentError, "Invalid sub-bucket parameter: #{name} must be a positive integer."
-  end
-
-  def __unvalidated_multi_request__(id, buckets, cf, opts) do
-    {buckets, t_interval} = Map.to_list(buckets) |> prepare_multi_params(cf)
-
-    if cf > 0 do
-      AtomicBucket.__multi_request_pos_cf__(id, buckets, t_interval, cf, opts)
-    else
-      AtomicBucket.__multi_request_np_cf__(id, buckets, t_interval, cf, opts)
-    end
-  end
-
-  def __multi_request_pos_cf__(id, buckets, t_interval, cf, opts) do
-    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
-    timer = get_timer(opts)
-    elapsed = wrapping_timer_delta(prev_timer, timer)
-    refill = div(elapsed, t_interval)
-    ams_refill = refill_all(ams_old, buckets, refill)
-    ams_request = charge_all(ams_refill, buckets)
-
-    if Enum.all?(ams_request, &(&1 >= 0)) do
-      timer = prev_timer + refill * t_interval
-
-      new_atomic = pack_bucket(ams_request, timer, buckets)
-
-      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-        :ok ->
-          results = allowed_requests_pos_cf(ams_request, buckets, %{})
-          {:allow, results, bucket_ref}
-
-        _ ->
-          __multi_request_pos_cf__(id, buckets, t_interval, cf, opts)
-      end
-    else
-      results = denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, %{})
-
-      {:deny, results, bucket_ref}
-    end
-  end
-
-  def __multi_request_np_cf__(id, buckets, t_interval, cf, opts) do
-    # Fast path for non-positive cost factor.
-    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
-    timer = get_timer(opts)
-    elapsed = wrapping_timer_delta(prev_timer, timer)
-    refill = div(elapsed, t_interval)
-    ams_request = refill_add_np_cf(ams_old, buckets, refill, cf)
-    timer = prev_timer + refill * t_interval
-    new_atomic = pack_bucket(ams_request, timer, buckets)
-
-    case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
-      :ok ->
-        results = allowed_requests_np_cf(ams_request, buckets, cf, %{})
-        {:allow, results, bucket_ref}
-
-      _ ->
-        __multi_request_np_cf__(id, buckets, t_interval, cf, opts)
-    end
-  end
-
-  defp refill_all(amounts, _, 0), do: amounts
-
-  defp refill_all([], [], _refill), do: []
-
-  defp refill_all([tokens | amounts], [{_, {capacity, _, _}} | buckets], refill) do
-    [min(capacity, tokens + refill) | refill_all(amounts, buckets, refill)]
-  end
-
-  defp charge_all([], _buckets), do: []
-
-  defp charge_all([tokens | amounts], [{_, {_, _, cost}} | buckets]) do
-    # Cost here already includes cost factor, applied by prepare_buckets/4.
-    [tokens - cost | charge_all(amounts, buckets)]
-  end
-
-  defp refill_add_np_cf([], [], _refill, _cf), do: []
-
-  defp refill_add_np_cf([tokens | amounts], [{_, {cap, _, _}} | buckets], refill, 0) do
-    # 0 is a special case: use zero cost, while cost parameter of the bucket contains positive cost.
-    # allowed_requests_np_cf/4 reports requests for cf = 1.
-    [min(cap, tokens + refill) | refill_add_np_cf(amounts, buckets, refill, 0)]
-  end
-
-  defp refill_add_np_cf([tokens | amounts], [{_, {cap, _, cost}} | buckets], refill, cf) do
-    # Negative cf is a special case: prepare_buckets/4 makes cost absolute, so we must
-    # change the sign of the operation.
-    [min(cap, tokens + refill + cost) | refill_add_np_cf(amounts, buckets, refill, cf)]
-  end
-
-  defp allowed_requests_pos_cf([], [], acc), do: acc
-
-  defp allowed_requests_pos_cf([tokens | amounts], [{name, {_, _, cost}} | buckets], acc) do
-    acc = Map.put(acc, name, div(tokens, cost))
-    allowed_requests_pos_cf(amounts, buckets, acc)
-  end
-
-  defp allowed_requests_np_cf([], [], _cf, acc), do: acc
-
-  defp allowed_requests_np_cf([tokens | amounts], [{name, {_, _, cost}} | buckets], 0, acc) do
-    # 0 is a special case: return value for cf = 1, prepare_buckets/4 keeps original cost.
-    acc = Map.put(acc, name, div(tokens, cost))
-    allowed_requests_np_cf(amounts, buckets, 0, acc)
-  end
-
-  defp allowed_requests_np_cf([tokens | amounts], [{name, {_, _, cost}} | buckets], cf, acc) do
-    # Negative cf is a special case: prepare_buckets/4 applies absolute cf.
-    acc = Map.put(acc, name, div(tokens, cost))
-    allowed_requests_np_cf(amounts, buckets, cf, acc)
-  end
-
-  defp denied_requests([], [], [], [], _t_interval, _elapsed, acc), do: acc
-
-  defp denied_requests(
-         [t_old | ams_old],
-         [t_refill | ams_refill],
-         [t_request | ams_request],
-         [{name, {_, _, cost}} | buckets],
-         t_interval,
-         elapsed,
-         acc
-       ) do
-    # Cost here already includes (positive) cost factor, applied by prepare_buckets/4.
-    result =
-      if t_request >= 0 do
-        # Positive verdict here doesn't mean we subtract the amount.
-        {:allow, div(t_refill, cost)}
-      else
-        {:deny, (cost - t_old) * t_interval - elapsed}
-      end
-
-    acc = Map.put(acc, name, result)
-
-    denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, acc)
-  end
-
-  @doc """
   Checks if the request is allowed according to bucket parameters.
 
   Supports variable (including zero and negative) cost.
@@ -576,6 +266,302 @@ defmodule AtomicBucket do
     if abs(cost) > capacity do
       raise ArgumentError, "cost can't exceed capacity."
     end
+  end
+
+  @doc """
+  Checks if the request is allowed according to multiple rate limits.
+  By default fixed request cost is assumed, but variable cost is also
+  supported via cost factor.
+
+  Uses simplified algorithm, where each rate is represented as
+  request interval in milliseconds instead of window and requests.
+  The bucket is updated in a single atomic operation.
+
+  Multiple buckets are initialized in full state. Every request will
+  refill each bucket if needed and check if all buckets have enough
+  tokens to make the request. On success the request tokens are
+  removed from each bucket and the call returns `{:allow, bucket_ref}`.
+  Otherwise, each bucket is left untouched and the call returns
+  `{:deny, bucket_ref}`. `bucket_ref` is a reference to the bucket
+  atomic.
+
+  Arguments:
+    - `bucket_id` any id unique within the bucket table
+    - `sub_buckets` a map describing sub-buckets, with sub-bucket
+      names as keys and `{request interval in milliseconds, burst requests}`
+      tuples as values.
+    - `cost_factor` integer multiplier for the request cost
+
+  Supports same options as `request/5`, plus:
+    - `:details` - whether to return info about sub-bucket state (boolean).
+      If true, the call returns either `{:allow, requests, bucket_ref}`,
+      where `requests` is a map with remaining requests of each sub-bucket,
+      or `{:deny, results, bucket_ref}`, where `results` is a map with
+      sub-bucket name keys and result tuples (`{:allow, remaining requests}`
+      or `{:deny, timeout}`) as values.
+      If false (default value), only basic verdict is returned.
+      Disabled details skip unnecessary calculations, and turning them on
+      has big impact on performance of the operation.
+      Note that remaining requests in the result tuple reflect final number
+      of available requests in the sub-bucket after the call.
+  """
+  @spec multi_request(
+          bucket_id :: any(),
+          sub_buckets :: %{
+            (name :: atom()) => {request_interval :: pos_integer(), burst :: pos_integer()}
+          },
+          cost_factor :: integer(),
+          opts :: keyword()
+        ) ::
+          {verdict(), :atomics.atomics_ref()}
+          | {:allow, %{(name :: any()) => non_neg_integer()}, :atomics.atomics_ref()}
+          | {:deny, %{(name :: any()) => {verdict(), non_neg_integer()}}, :atomics.atomics_ref()}
+
+  defmacro multi_request(bucket_id, sub_buckets, cost_factor \\ 1, opts \\ []) do
+    buckets = Macro.expand(sub_buckets, __CALLER__)
+    cf = Macro.expand(cost_factor, __CALLER__)
+    opts = Macro.expand(opts, __CALLER__)
+
+    if Macro.quoted_literal?(buckets) && Macro.quoted_literal?(cf) do
+      if !is_integer(cf), do: int_arg_error!("cost_factor")
+      {:%{}, _, bucket_list} = buckets
+      {buckets, t_int} = prepare_multi_params(bucket_list, cf)
+      b_ast = Enum.map(buckets, fn {k, v} -> {k, Macro.escape(v)} end)
+      details = get_details(opts)
+
+      cond do
+        details == true ->
+          quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
+            AtomicBucket.__multi_request_details__(id, b_ast, t_int, cf, opts)
+          end
+
+        details == false ->
+          quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
+            AtomicBucket.__multi_request__(id, b_ast, t_int, cf, opts)
+          end
+
+        true ->
+          quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
+            AtomicBucket.__multi_request_check_details__(id, b_ast, t_int, cf, opts)
+          end
+      end
+    else
+      quote bind_quoted: [id: bucket_id, buckets: buckets, cf_ast: cost_factor, opts: opts] do
+        AtomicBucket.__unvalidated_multi_request__(id, buckets, cf_ast, opts)
+      end
+    end
+  end
+
+  defp get_details(opts) when is_list(opts) do
+    # Only get the value if all keys are literal atoms.
+    if Enum.all?(opts, fn {k, _} -> is_atom(k) end) do
+      Keyword.get(opts, :details, @detault_multi_details?)
+    end
+  end
+
+  defp get_details(_opts), do: nil
+
+  defp prepare_multi_params([], _cost_factor) do
+    raise ArgumentError, "Must include at least 1 sub-bucket."
+  end
+
+  defp prepare_multi_params(buckets, cost_factor) do
+    t_interval = token_interval(buckets, nil)
+
+    prepared =
+      prepare_buckets(buckets, 0, t_interval, cost_factor)
+      |> Enum.sort_by(fn {_, {c, _, _}} -> c end)
+
+    {prepared, t_interval}
+  end
+
+  defp token_interval([{_, {interval, _}} | buckets], nil) do
+    if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
+
+    token_interval(buckets, interval)
+  end
+
+  defp token_interval([{_, {interval, _}} | buckets], prev_interval) do
+    if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
+
+    token_interval(buckets, Integer.gcd(interval, prev_interval))
+  end
+
+  defp token_interval([], interval), do: interval
+
+  defp token_interval(_, _) do
+    raise ArgumentError, "Invalid sub_buckets argument."
+  end
+
+  defp prepare_buckets([], _bits_acc, _t_interval, _cf), do: []
+
+  defp prepare_buckets([{name, {req_int, burst}} | buckets], bits_acc, t_int, cf) do
+    if !pos_int?(burst), do: sub_bucket_arg_error!("burst")
+
+    cost = div(req_int, t_int)
+    scaled_cost = scaled_cost(cost, cf)
+    cap = burst * cost
+    bits = floor(:math.log2(cap)) + 1
+    total_bits = bits_acc + bits
+
+    if total_bits > @token_bits do
+      error =
+        """
+        Required multi-bucket capacity (#{total_bits} bits) is above the limit (#{@token_bits}). \
+        Consider increasing GCD of request intervals, reducing bursts or number of sub-buckets.
+        """
+
+      raise ArgumentError, error
+    end
+
+    [{name, {cap, bits, scaled_cost}} | prepare_buckets(buckets, total_bits, t_int, cf)]
+  end
+
+  # Zero cf is converted to 1 for calculations of remaining requests, skipped in
+  # charge_all and refill_charge_all.
+  defp scaled_cost(cost, 0), do: cost
+  defp scaled_cost(cost, cf), do: cost * cf
+
+  defp sub_bucket_arg_error!(name) do
+    raise ArgumentError, "Invalid sub-bucket parameter: #{name} must be a positive integer."
+  end
+
+  def __unvalidated_multi_request__(id, buckets, cf, opts) do
+    {buckets, t_interval} = Map.to_list(buckets) |> prepare_multi_params(cf)
+    __multi_request_check_details__(id, buckets, t_interval, cf, opts)
+  end
+
+  def __multi_request_check_details__(id, buckets, t_interval, cf, opts) do
+    if Keyword.get(opts, :details, @detault_multi_details?) do
+      __multi_request_details__(id, buckets, t_interval, cf, opts)
+    else
+      __multi_request__(id, buckets, t_interval, cf, opts)
+    end
+  end
+
+  def __multi_request__(id, buckets, t_interval, cf, opts) do
+    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
+    timer = get_timer(opts)
+    elapsed = wrapping_timer_delta(prev_timer, timer)
+    refill = div(elapsed, t_interval)
+
+    try do
+      ams_request = refill_charge_all(ams_old, buckets, refill, cf)
+      timer = prev_timer + refill * t_interval
+      new_atomic = pack_bucket(ams_request, timer, buckets)
+
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          {:allow, bucket_ref}
+
+        _ ->
+          __multi_request__(id, buckets, t_interval, cf, opts)
+      end
+    catch
+      _ -> {:deny, bucket_ref}
+    end
+  end
+
+  def __multi_request_details__(id, buckets, t_interval, cf, opts) do
+    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
+    timer = get_timer(opts)
+    elapsed = wrapping_timer_delta(prev_timer, timer)
+    refill = div(elapsed, t_interval)
+    ams_refill = refill_all(ams_old, buckets, refill)
+    ams_request = charge_all(ams_refill, buckets, cf)
+
+    if Enum.all?(ams_request, &(&1 >= 0)) do
+      timer = prev_timer + refill * t_interval
+      new_atomic = pack_bucket(ams_request, timer, buckets)
+
+      case :atomics.compare_exchange(bucket_ref, 1, atomic, new_atomic) do
+        :ok ->
+          results = allowed_requests(ams_request, buckets, cf, %{})
+          {:allow, results, bucket_ref}
+
+        _ ->
+          __multi_request_details__(id, buckets, t_interval, cf, opts)
+      end
+    else
+      results =
+        denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, %{})
+
+      {:deny, results, bucket_ref}
+    end
+  end
+
+  defp refill_all(amounts, _, 0), do: amounts
+
+  defp refill_all([], [], _refill), do: []
+
+  defp refill_all([tokens | amounts], [{_, {capacity, _, _}} | buckets], refill) do
+    [min(capacity, tokens + refill) | refill_all(amounts, buckets, refill)]
+  end
+
+  defp charge_all(amounts, _, 0), do: amounts
+
+  defp charge_all([], _buckets, _cf), do: []
+
+  defp charge_all([tokens | amounts], [{_, {_, _, cost}} | buckets], cf) do
+    # Cost here already includes cost factor, applied by prepare_buckets/4.
+    [tokens - cost | charge_all(amounts, buckets, cf)]
+  end
+
+  # Fast path for details=false.
+  defp refill_charge_all([], [], _refill, _cf), do: []
+
+  defp refill_charge_all(amounts, buckets, refill, 0) do
+    # Zero cf = refill only.
+    refill_all(amounts, buckets, refill)
+  end
+
+  defp refill_charge_all([tokens | amounts], [{_, {capacity, _, cost}} | buckets], refill, cf) do
+    new_tokens = min(capacity, min(capacity, tokens + refill) - cost)
+
+    if new_tokens >= 0 do
+      [new_tokens | refill_charge_all(amounts, buckets, refill, cf)]
+    else
+      throw(:error)
+    end
+  end
+
+  defp allowed_requests([], [], _cf, acc), do: acc
+
+  defp allowed_requests([tokens | amounts], [{name, {_, _, cost}} | buckets], 0, acc) do
+    # 0 is a special case: return value for cf = 1, prepare_buckets/4 keeps original cost.
+    acc = Map.put(acc, name, div(tokens, cost))
+    allowed_requests(amounts, buckets, 0, acc)
+  end
+
+  defp allowed_requests([tokens | amounts], [{name, {_, _, cost}} | buckets], cf, acc) do
+    acc = Map.put(acc, name, div(tokens, abs(cost)))
+    allowed_requests(amounts, buckets, cf, acc)
+  end
+
+  defp denied_requests([], [], [], [], _t_interval, _elapsed, acc), do: acc
+
+  defp denied_requests(
+         [t_old | ams_old],
+         [t_refill | ams_refill],
+         [t_request | ams_request],
+         [{name, {_, _, cost}} | buckets],
+         t_interval,
+         elapsed,
+         acc
+       ) do
+    # Cost here already includes cost factor, applied by prepare_buckets/4.
+    # The cost is positive, because zero and negative cf can't result in denied req.
+    result =
+      if t_request >= 0 do
+        # Positive verdict here doesn't mean we subtract the amount.
+        {:allow, div(t_refill, cost)}
+      else
+        {:deny, (cost - t_old) * t_interval - elapsed}
+      end
+
+    acc = Map.put(acc, name, result)
+
+    denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, acc)
   end
 
   defp expand_int(ast, name, env, pos? \\ false) do
