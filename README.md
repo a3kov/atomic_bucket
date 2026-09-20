@@ -27,6 +27,8 @@ ETS and optionally cached as persistent terms.
 
  - support for token "refunds" and variable cost requests
 
+ - multiple rate limit checks in 1 atomic operation
+
  - compile-time validation of arguments when possible
 
 ## Installation
