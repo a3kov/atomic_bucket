@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.0 (2026-09-20)
+
+Requires Elixir >=1.17 and Erlang >=27.
+New feature: enforce multiple rate limits in a single operation via multi_request/4.
+Lazy refills in raw_request/5.
+Move bucket cleanup procedure to a task for easy gc.
+Improve performance of the cleanup procedure.
+Fix flaky tests.
+Improve docs.
+
 ## v0.3.1 (2026-08-16)
 
 Create unique server id in child spec based on the table for easier inclusion

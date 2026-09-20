@@ -6,8 +6,8 @@ defmodule AtomicBucket.MixProject do
   def project do
     [
       app: :atomic_bucket,
-      version: "0.3.1",
-      elixir: "~> 1.15",
+      version: "0.4.0",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       source_url: @source_url,
