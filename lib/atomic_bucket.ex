@@ -369,8 +369,8 @@ defmodule AtomicBucket do
   end
 
   defp prepare_multi_params(buckets, cost_factor) do
-    # token_interval/2 must be first because it's doing validation.
-    t_interval = token_interval(buckets, nil)
+    # token_interval/1 must be first because it's doing validation.
+    t_interval = token_interval(buckets)
     sorted_buckets = Enum.sort_by(buckets, fn {_, {i, _}} -> i end)
     validate_rates!(sorted_buckets)
     prepared = prepare_buckets(sorted_buckets, 0, t_interval, cost_factor)
@@ -396,7 +396,7 @@ defmodule AtomicBucket do
     end
   end
 
-  defp token_interval([{_, {interval, _}} | buckets], nil) do
+  defp token_interval([{_, {interval, _}} | buckets]) do
     if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
 
     token_interval(buckets, interval)
