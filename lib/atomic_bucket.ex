@@ -402,6 +402,10 @@ defmodule AtomicBucket do
     token_interval(buckets, interval)
   end
 
+  defp token_interval(_) do
+    raise ArgumentError, "Invalid sub_buckets argument."
+  end
+
   defp token_interval([{_, {interval, _}} | buckets], prev_interval) do
     if !pos_int?(interval), do: sub_bucket_arg_error!("request interval")
 
@@ -409,10 +413,6 @@ defmodule AtomicBucket do
   end
 
   defp token_interval([], interval), do: interval
-
-  defp token_interval(_, _) do
-    raise ArgumentError, "Invalid sub_buckets argument."
-  end
 
   defp prepare_buckets([], _bits_acc, _t_interval, _cf), do: []
 
