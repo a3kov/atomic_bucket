@@ -132,8 +132,8 @@ the following intervals:
   - 330 for better GCD
   - 300 for much better GCD
 
-Note that because each request consumes from all buckets, for the multi-bucket
-to work lower rates must have higher bursts - otherwise they kick in too soon.
+There must be no duplicate intervals inside the sub-buckets, and lower
+rate buckets must have bigger bursts (otherwise they kick in too soon).
 
 Passing literal values for the arguments is important here, as this rate limit 
 mode has more work to do and big chunk of it can be moved to compile-time.

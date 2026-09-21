@@ -18,6 +18,7 @@ defmodule AtomicBucket do
   @compile {:inline,
             [
               validate_raw_params!: 3,
+              validate_rates!: 1,
               get_bucket: 3,
               open_bucket: 4,
               try_create_bucket: 3,
@@ -285,6 +286,9 @@ defmodule AtomicBucket do
   `{:deny, bucket_ref}`. `bucket_ref` is a reference to the bucket
   atomic.
 
+  There must be no duplicate intervals inside the sub-buckets, and lower
+  rate buckets must have bigger bursts (otherwise they kick in too soon).
+
   Arguments:
     - `bucket_id` any id unique within the bucket table
     - `sub_buckets` a map describing sub-buckets, with sub-bucket
@@ -365,13 +369,31 @@ defmodule AtomicBucket do
   end
 
   defp prepare_multi_params(buckets, cost_factor) do
+    # token_interval/2 must be first because it's doing validation.
     t_interval = token_interval(buckets, nil)
-
-    prepared =
-      prepare_buckets(buckets, 0, t_interval, cost_factor)
-      |> Enum.sort_by(fn {_, {c, _, _}} -> c end)
+    sorted_buckets = Enum.sort_by(buckets, fn {_, {i, _}} -> i end)
+    validate_rates!(sorted_buckets)
+    prepared = prepare_buckets(sorted_buckets, 0, t_interval, cost_factor)
 
     {prepared, t_interval}
+  end
+
+  defp validate_rates!([{_, {interval, burst}} | buckets]) do
+    validate_rates!(buckets, interval, burst)
+  end
+
+  defp validate_rates!([], _, _), do: :ok
+
+  defp validate_rates!([{_, {interval, _}} | _], interval, _) do
+    raise ArgumentError, "Sub-bucket rates must be different."
+  end
+
+  defp validate_rates!([{_, {interval, burst}} | buckets], _, prev_burst) do
+    if burst <= prev_burst do
+      raise ArgumentError, "Sub-buckets with lower rates must have bigger bursts."
+    else
+      validate_rates!(buckets, interval, burst)
+    end
   end
 
   defp token_interval([{_, {interval, _}} | buckets], nil) do

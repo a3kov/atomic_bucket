@@ -368,6 +368,42 @@ defmodule AtomicBucketTest do
       end
     end
 
+    test "with equal intervals raises", %{bucket_id: bucket_id} do
+      equal_intervals1 = %{second: {100, 5}, minute: {3_000, 10}, hour: {100, 6}}
+      equal_intervals2 = %{second: {100, 5}, minute: {100, 10}}
+
+      assert_raise ArgumentError, fn ->
+        multi_request(bucket_id, equal_intervals1)
+      end
+
+      assert_raise ArgumentError, fn ->
+        multi_request(bucket_id, equal_intervals2)
+      end
+    end
+
+    test "with invalid bursts raises", %{bucket_id: bucket_id} do
+      low_rate_low_burst1 = %{second: {100, 5}, minute: {3_000, 10}, hour: {36000, 9}}
+      low_rate_low_burst2 = %{second: {100, 5}, minute: {3_000, 4}, hour: {36000, 10}}
+      low_rate_same_burst1 = %{second: {100, 5}, minute: {3_000, 10}, hour: {36000, 10}}
+      low_rate_same_burst2 = %{second: {100, 5}, minute: {3_000, 5}, hour: {36000, 10}}
+
+      assert_raise ArgumentError, fn ->
+        multi_request(bucket_id, low_rate_low_burst1)
+      end
+
+      assert_raise ArgumentError, fn ->
+        multi_request(bucket_id, low_rate_low_burst2)
+      end
+
+      assert_raise ArgumentError, fn ->
+        multi_request(bucket_id, low_rate_same_burst1)
+      end
+
+      assert_raise ArgumentError, fn ->
+        multi_request(bucket_id, low_rate_same_burst2)
+      end
+    end
+
     test "with capacity above the max raises", %{bucket_id: bucket_id} do
       low_gcd_buckets =
         %{
