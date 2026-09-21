@@ -293,7 +293,7 @@ defmodule AtomicBucket do
     - `cost_factor` integer multiplier for the request cost
 
   Supports same options as `request/5`, plus:
-    - `:details` - whether to return info about sub-bucket state (boolean).
+    - `:details` - whether to return sub-bucket results (boolean).
       If true, the call returns either `{:allow, requests, bucket_ref}`,
       where `requests` is a map with remaining requests of each sub-bucket,
       or `{:deny, results, bucket_ref}`, where `results` is a map with
