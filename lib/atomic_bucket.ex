@@ -520,7 +520,7 @@ defmodule AtomicBucket do
     if new_tokens >= 0 do
       [new_tokens | refill_charge_all(amounts, buckets, refill, cf)]
     else
-      throw(:error)
+      throw(:deny)
     end
   end
 
