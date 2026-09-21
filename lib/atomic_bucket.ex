@@ -328,7 +328,7 @@ defmodule AtomicBucket do
       {buckets, t_int} = prepare_multi_params(bucket_list, cf)
       b_ast = Enum.map(buckets, fn {k, v} -> {k, Macro.escape(v)} end)
 
-      case get_details(opts) do
+      case expand_details(opts) do
         true ->
           quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
             AtomicBucket.__multi_request_details__(id, b_ast, t_int, cf, opts)
@@ -351,14 +351,14 @@ defmodule AtomicBucket do
     end
   end
 
-  defp get_details(opts) when is_list(opts) do
+  defp expand_details(opts) when is_list(opts) do
     # Only get the value if all keys are expanded.
     if Enum.all?(opts, fn {k, _} -> is_atom(k) end) do
       Keyword.get(opts, :details, @detault_multi_details?)
     end
   end
 
-  defp get_details(_opts), do: nil
+  defp expand_details(_opts), do: nil
 
   defp prepare_multi_params([], _cost_factor) do
     raise ArgumentError, "Must include at least 1 sub-bucket."
