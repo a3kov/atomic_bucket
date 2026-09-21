@@ -352,7 +352,7 @@ defmodule AtomicBucket do
   end
 
   defp get_details(opts) when is_list(opts) do
-    # Only get the value if all keys are literal atoms.
+    # Only get the value if all keys are expanded.
     if Enum.all?(opts, fn {k, _} -> is_atom(k) end) do
       Keyword.get(opts, :details, @detault_multi_details?)
     end
