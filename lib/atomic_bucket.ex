@@ -800,6 +800,8 @@ defmodule AtomicBucket do
     cleanup_interval = cleanup_interval(opts)
     max_idle_period = max_idle_period(opts)
 
+    Process.set_label({__MODULE__, table})
+
     :ets.new(table, [
       :named_table,
       :public,
