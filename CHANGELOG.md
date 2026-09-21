@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 (2026-09-21)
+
+Improve validation of sub-bucket rates.
+Move benchmark support file out of the project.
+Set process labels for AtomicBucket servers.
+
 ## v0.4.0 (2026-09-20)
 
 Requires Elixir >=1.17 and Erlang >=27.
