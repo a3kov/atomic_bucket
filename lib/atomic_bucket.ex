@@ -327,20 +327,19 @@ defmodule AtomicBucket do
       {:%{}, _, bucket_list} = buckets
       {buckets, t_int} = prepare_multi_params(bucket_list, cf)
       b_ast = Enum.map(buckets, fn {k, v} -> {k, Macro.escape(v)} end)
-      details = get_details(opts)
 
-      cond do
-        details == true ->
+      case get_details(opts) do
+        true ->
           quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
             AtomicBucket.__multi_request_details__(id, b_ast, t_int, cf, opts)
           end
 
-        details == false ->
+        false ->
           quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
             AtomicBucket.__multi_request__(id, b_ast, t_int, cf, opts)
           end
 
-        true ->
+        _ ->
           quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
             AtomicBucket.__multi_request_check_details__(id, b_ast, t_int, cf, opts)
           end
