@@ -179,7 +179,7 @@ case AtomicBucket.multi_request(:mybucket, @sub_buckets, 1, details: true) do
 end
 ```
 Variable (including zero and negative) cost is supported via cost factor (CF).
-To apply variable cost, use cost factor > 1 and scale up burst numbers accordingly.
+To apply variable cost, use CF > 1 and scale up burst numbers accordingly.
 CF only affects cost calculations for each request - capacity and refills are 
 calculated using CF = 1.
 
@@ -187,14 +187,14 @@ Note that both number of remaining requests and timeout are scaled with CF,
 but likely won't be very useful with CF > 1 (not that they make much sense with
 variable cost anyway).
 
-Zero and negative cost factor are special cases:
-  - for zero cost number of remaining requests is calculated with CF = 1
-  - for negative cost number of remaining requests is calculated with absolute CF
-    of the request, i.e. if CF = -2, it will return requests available for CF = 2.
+Zero and negative CF are special cases:
+  - for zero CF number of remaining requests is calculated with CF = 1
+  - for negative CF number of remaining requests is calculated with absolute CF
+    of the request, i.e. if CF = -2, requests use CF = 2.
 
 ```elixir
 # Initialize multi-bucket for future use, or peek inside existing multi-bucket.
-{:allow, _} = AtomicBucket.multi_request(:mybucket, @sub_buckets, 0)
+AtomicBucket.multi_request(:mybucket, @sub_buckets, 0)
 
 # Refund all sub-buckets with token amounts equal to 1 request.
 AtomicBucket.multi_request(:mybucket, @sub_buckets, -1)
@@ -205,25 +205,30 @@ AtomicBucket.multi_request(:mybucket, @sub_buckets, -1)
 You can tune the server parameters for the buckets in use - by default 
 it's using very conservative values picked to cover most common rates.
 
-```elixir
-# application.ex
-children = [
-  {AtomicBucket,
-   cleanup_interval: :timer.minutes(20), max_idle_period: :timer.hours(1)}
-]
-```
-
 As the server doesn't know parameters of the buckets, and stored
 timestamps may lag because of lazy refills, it's better to avoid
 very low values for `max_idle_period`. If in doubt, set it at least
 2x the largest rate limit window for the table.
 
 It's also a good idea to segregate the buckets using multiple servers where
-each server is tuned for specific rate. This way lower rate buckets can stay
-in memory for longer periods, while high rate buckets are removed much sooner.
+each server is tuned for specific bucket type. This alows to:
+ - keep lower rate buckets in memory for longer periods, while removing high
+   rate buckets much sooner.
+ - isolate "persistent" buckets and store them for much longer
+
 Start servers with different tables and cleanup parameters and pass the table
 option to `request/5`, `raw_request/5` and`multi_request/4`. Bucket ids are 
 table-scoped and don't have to be globally unique.
+
+```elixir
+# application.ex
+children = [
+  {AtomicBucket,
+    table: :table1, cleanup_interval: :timer.minutes(20), max_idle_period: :timer.hours(1)},
+  {AtomicBucket,
+    table: :table2, cleanup_interval: :timer.hours(3), max_idle_period: :timer.hours(12)}
+]
+```
 
 ## Caveats
 
