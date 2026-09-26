@@ -38,86 +38,89 @@ Add it to your list of dependencies in `mix.exs` and run `mix deps.get`:
 ```elixir
 def deps do
   [
-    {:atomic_bucket, "~> 0.4"}
+    {:atomic_bucket, "~> 0.5"}
   ]
 end
 ```
-
-For bucket storage you need to start AtomicBucket server - without
-it the library will not work. Add to your application:
-
-```elixir
-children = [.., AtomicBucket, ..]
-```
-This will once per hour clean buckets that haven't had requests in
-the last 24 hours. See **Server configuration** section below for more info.
 
 ## Usage
 
 ### Fixed cost requests
 
-For simple cases where requests have fixed cost use `request/5` macro with desired
-rate and burst parameters. When possible, call the macro with literal arguments
-for better performance and compile-time validation. Module attributes are fine too.
+For simple cases where requests have fixed cost create use `AtomicBucket.FixedCostLimiter`.
 
 ```elixir
-require AtomicBucket
-
-# Averate rate: 10 reqs/s with 3 burst requests. 
-case AtomicBucket.request(:mybucket, 1, 10, 3) do
-  {:allow, count, _ref} ->
-    # Request is allowed. May immediately attempt to make additional
-    # <count> calls.
-  {:deny, timeout, _ref} ->
-    # Request is denied. The bucket may have enough tokens in <timeout>
-    # milliseconds.
+defmodule MyFixedLimiter do
+  use AtomicBucket.FixedCostLimiter
 end
 ```
 
-Bucket id can be any term.
+To store bucket data you need to start the server that manages buckets - without
+it the rate limiter will not work.
+
+This will once per hour clean buckets that haven't had requests in
+the last 24 hours. See **Rate limiter configuration** section below for more info.
+
 ```elixir
-AtomicBucket.request({:client, ip_addr}, 1, 10, 3)
+# application.ex
+children = [.., MyFixedLimiter, ..]
 ```
 
-Cache bucket reference in `:persistent_term` for better performance. Works well
-for buckets with low churn. See
-[:persistent_term docs](https://www.erlang.org/doc/apps/erts/persistent_term.html#content)
-for more info on the tradeoffs.
+The rate limiter module now has generated API.
 ```elixir
-AtomicBucket.request(:mybucket, 1, 10, 3, persistent: true)
-```
+defmodule CallerModule do
+  require MyFixedLimiter
 
-Reuse bucket references in long running processes for top performance.
-```elixir
-{:allow, _requests, bucket_ref} = AtomicBucket.request(:mybucket, 1, 10, 3)
-AtomicBucket.request(:mybucket, 1, 10, 3, ref: bucket_ref)
+  # Averate rate: 10 reqs/s with 3 burst requests. 
+  case MyFixedLimiter.request(:mybucket, 1, 10, 3) do
+    {:allow, count, _ref} ->
+      # Request is allowed. May immediately attempt to make additional
+      # <count> calls.
+
+    {:deny, timeout, _ref} ->
+      # Request is denied. The bucket may have enough tokens in <timeout>
+      # milliseconds.
+  end
+end
 ```
 
 ### Variable cost requests.
 
-Use `raw_request/5` macro to implement advanced features such as token "refunds"
-or variable cost. It supports same options as `request/5`
+Create a rate limiter using `AtomicBucket.VariableCostLimiter` to implement advanced 
+features such as token "refunds" or variable cost.
 ```elixir
-# This would be 10 req/s with 2 burst requests in a fixed cost scenario
-{:allow, tokens, ref} = AtomicBucket.raw_request(:mybucket, 200, 1, 100)
+defmodule MyVariableLimiter do
+  use AtomicBucket.VariableCostLimiter
+end
 
-# But the next request may have a different cost
-AtomicBucket.raw_request(:mybucket, 200, 1, 150)
+# application.ex
+children = [.., MyVariableLimiter, ..]
 
-# Token "refund" is always allowed
-AtomicBucket.raw_request(:mybucket, 200, 1, -100)
+defmodule CallerModule do
+  require MyVariableLimiter
+
+  # This would be 10 req/s with 2 burst requests in a fixed cost scenario
+  {:allow, tokens, ref} = MyVariableLimiter.request(:mybucket, 200, 1, 100)
+
+  # But the next request may have a different cost
+  MyVariableLimiter.request(:mybucket, 200, 1, 150)
+
+  # Token "refund" is always allowed
+  MyVariableLimiter.request(:mybucket, 200, 1, -100)
+end
 ```
 
 ### Multi-bucket, or multiple rate limits in 1 check.
 
-Use `multi_request/4` macro to enforce multiple rate limits at the same time, all
-in a single atomic operation. This covers cases where higher short-term rates must
-be allowed without making the burst instant, while enforcing lower sustained
-long-term rates. It supports same options as `request/5`
+Use `AtomicBucket.MultiRateLimiter` to create rate limiters enforcing
+multiple rate limits at the same time, all in a single atomic operation.
+This covers cases where higher short-term rates must be allowed without making
+the whole burst instant, while enforcing lower sustained long-term rates.
 
-The macro uses a different algorithm where rates are defined as request intervals.
-It stores multiple buckets in a single 64bit atomic but has some compromises:
+This rate limiter type uses a different algorithm where rates are defined as request
+intervals. It stores multiple buckets in a single 64bit atomic but has some compromises:
   - rates resulting in fractional intervals are not supported
+
   - some combinations of rates can exceed maximum storage capacity
 
 If a combination of rates exceeds capacity limit, one could try to
@@ -135,49 +138,49 @@ the following intervals:
 There must be no duplicate intervals inside the sub-buckets, and lower
 rate buckets must have bigger bursts (otherwise they kick in too soon).
 
-Passing literal values for the arguments is important here, as this rate limit 
-mode has more work to do and big chunk of it can be moved to compile-time.
-The easiest way to ensure literals is to prepare the values in module attributes.
 
 ```elixir
-# Allows 2 instant requests,
-# then ~ 3 requests per second for another 5 requests,
-# then ~ 1 request every 3s for another 23 requests,
-# and finally when all buckets are empty the sustained rate is ~ 1 request per
-# minute.
-@sub_buckets %{
-  second: {330, 2},
-  minute: {3_000, 7},
-  hour: {60_000, 30}
-}
-```
+defmodule MyMultiLimiter do
+  use AtomicBucket.MultiRateLimiter
+end
 
-You can do a simple check:
-```elixir
-case AtomicBucket.multi_request(:mybucket, @sub_buckets) do
-  {:allow, _bucket_ref} ->
-    # Each bucket loses some tokens and the request is allowed.
+defmodule CallerModule do
+  require MyMultiLimiter
 
-  {:deny, _bucket_ref} ->
-    # All buckets keep their tokens, the request is denied.
+  # Allows 2 instant requests,
+  # then ~ 3 requests per second for another 5 requests,
+  # then ~ 1 request every 3s for another 23 requests,
+  # and finally when all buckets are empty the sustained rate is ~ 1 request per
+  # minute.
+  @sub_buckets %{
+    second: {330, 2},
+    minute: {3_000, 7},
+    hour: {60_000, 30}
+  }
+
+  # You can do a simple check:
+  case MyMultiLimiter.request(:mybucket, @sub_buckets) do
+    {:allow, _bucket_ref} ->
+      # Each bucket loses some tokens and the request is allowed.
+
+    {:deny, _bucket_ref} ->
+      # All buckets keep their tokens, the request is denied.
+  end
+
+  # Or use `request_details/4` if you actually need results of each bucket.
+  case MyMultiLimiter.request_details(:mybucket, @sub_buckets) do
+    {:allow, requests, _bucket_ref} ->
+      # Remaining requests of each bucket are returned.
+      %{hour: 29, minute: 6, second: 1} = requests
+
+    {:deny, results, _bucket_ref} ->
+      # Each bucket has its own result similar to request/5, but the 
+      # number of requests reflects the state after the call (not reduced).
+      %{hour: {:allow, 21}, minute: {:deny, 1804}, second: {:allow, 2}} = results
+  end
 end
 ```
 
-Or pass `details: true` if you actually need result of each bucket. This is
-an opt-in feature, because it has significant cost.
-
-```elixir
-case AtomicBucket.multi_request(:mybucket, @sub_buckets, 1, details: true) do
-  {:allow, requests, _bucket_ref} ->
-    # Remaining requests of each bucket are returned.
-    %{hour: 29, minute: 6, second: 1} = requests
-
-  {:deny, results, _bucket_ref} ->
-    # Each bucket has its own result similar to request/5, but the 
-    # number of requests reflects the state after the call (not reduced).
-    %{hour: {:allow, 21}, minute: {:deny, 1804}, second: {:allow, 2}} = results
-end
-```
 Variable (including zero and negative) cost is supported via cost factor (CF).
 To apply variable cost, use CF > 1 and scale up burst numbers accordingly.
 CF only affects cost calculations for each request - capacity and refills are 
@@ -193,50 +196,116 @@ Zero and negative CF are special cases:
     of the request, i.e. if CF = -2, requests use CF = 2.
 
 ```elixir
-# Initialize multi-bucket for future use, or peek inside existing multi-bucket.
-AtomicBucket.multi_request(:mybucket, @sub_buckets, 0)
+# Peek inside existing multi-bucket.
+MyMultiLimiter.request_details(:mybucket, @sub_buckets, 0)
 
 # Refund all sub-buckets with token amounts equal to 1 request.
-AtomicBucket.multi_request(:mybucket, @sub_buckets, -1)
+MyMultiLimiter.request(:mybucket, @sub_buckets, -1)
 ```
 
-### Server configuration
+### Common tips (apply to all types of rate limiters)
 
-You can tune the server parameters for the buckets in use - by default 
+When possible, call request macros with literal arguments for better performance and
+compile-time validation. Module attributes and macros that expand to literals will work
+well too. This is especially important for `MultiRateLimiter` which is relatively heavy
+computation-wise.
+
+Bucket ids are scoped within its rate limiter (i.e. the ETS table) and don't have
+to be globally unique. Bucket id can be any term - it can refer to a specific resource
+or an external id.
+```elixir
+MyFixedLimiter.request({:client, ip_addr}, 1, 10, 3)
+```
+
+You can cache bucket references in `:persistent_term` for better performance. It should work
+well for buckets with low churn. Ideally, it must be buckets that are never deleted (until 
+the next deployment). See
+[:persistent_term docs](https://www.erlang.org/doc/apps/erts/persistent_term.html#content)
+for more info on the tradeoffs.
+
+```elixir
+defmodule MyLimiter do
+  use AtomicBucket.VariableCostLimiter, persistent: true
+end
+```
+
+For top performance you can reuse bucket references in long running processes.
+```elixir
+{:allow, _requests, bucket_ref} = MyFixedLimiter.request(:mybucket, 1, 10, 3)
+
+# Store bucket_ref somewhere, or pass it around.
+
+# This call is MUCH faster than the previous one.
+MyFixedLimiter.request(:mybucket, 1, 10, 3, ref: bucket_ref)
+```
+
+### Rate limiter configuration
+
+You can tune the server parameters for each rate limiter - by default 
 it's using very conservative values picked to cover most common rates.
+See `__using__/1` doc of each rate limiter for more info about the options.
 
 As the server doesn't know parameters of the buckets, and stored
 timestamps may lag because of lazy refills, it's better to avoid
 very low values for `max_idle_period`. If in doubt, set it at least
 2x the largest rate limit window for the table.
 
-It's also a good idea to segregate the buckets using multiple servers where
-each server is tuned for specific bucket type. This alows to:
- - keep lower rate buckets in memory for longer periods, while removing high
-   rate buckets much sooner.
- - isolate "persistent" buckets and store them for much longer
+It's also a good idea to segregate the buckets using multiple limiters where
+each limiter is tuned for specific bucket type. This alows to keep lower rate
+buckets in memory for longer periods, while removing high rate buckets much sooner.
 
-Start servers with different tables and cleanup parameters and pass the table
-option to `request/5`, `raw_request/5` and`multi_request/4`. Bucket ids are 
-table-scoped and don't have to be globally unique.
 
 ```elixir
+defmodule HighRateLimiter do
+  use AtomicBucket.FixedCostLimiter,
+    cleanup_interval: :timer.minutes(20),
+    max_idle_period: :timer.hours(1)
+end
+
+defmodule LowRateLimiter do
+  use AtomicBucket.FixedCostLimiter,
+    cleanup_interval: :timer.hours(3),
+    max_idle_period: :timer.hours(12)
+end
+
 # application.ex
 children = [
-  {AtomicBucket,
-    table: :table1, cleanup_interval: :timer.minutes(20), max_idle_period: :timer.hours(1)},
-  {AtomicBucket,
-    table: :table2, cleanup_interval: :timer.hours(3), max_idle_period: :timer.hours(12)}
+  HighRateLimiter,
+  LowRateLimiter
 ]
+```
+
+## Upgrading to 0.5.x from earlier versions.
+
+1) Check your application supervision tree. For every AtomicBucket entry create 
+corresponding rate limiting module, and move the cleanup params to the `use` call.
+
+2) If an AtomicBucket table was used for different types of buckets (fixed, variable,
+multi-rate), add a module for each bucket type.
+
+3) If a table was used for persistent buckets, add a module for the persistent
+buckets with `persistent: true` option.
+
+4) Replace all AtomicBucket calls with rate limiter module calls:
+ - `AtomicBucket.request(..)` becomes `MyFixedLimiter.request(..)`
+ - `AtomicBucket.raw_request(..)` becomes `MyVarLimiter.request(..)`
+ - `AtomicBucket.multi_request(..)` becomes `MyMultiLimiter.request(..)` or
+   `MyMultiLimiter.request_details(..)` if the `details: true` option was used
+
+5) Remove all options from macro calls except for `ref`.
+
+6) Remove all AtomicBucket entries from the supervision tree and add each rate 
+limiter module. No need to pass parameters manually - its done automatically.
+```elixir
+# application.ex
+children = [MyLimiter1, MyLimiter2, ..]
 ```
 
 ## Caveats
 
 The library makes no effort to ensure that bucket parameters remain
 stable across calls: the parameters are not stored at all! Using same bucket
-with different parameters will result in silent bugs. This also applies to 
-mixing `request/5`, `raw_request/5` and `multi_request/4` - it must be
-avoided.
+with different parameters will result in silent bugs.
 
 ## Benchmarks
 

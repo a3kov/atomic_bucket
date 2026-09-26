@@ -1,16 +1,20 @@
 # This benchmark performs 1_000 rate limit checks in each iteration.
 #
 # Run it like so:
-# mix run bench/request.exs
+# mix run bench/variable_cost_limiter.exs
 
 use AtomicBucket.Bench
 
-start_link([])
+require AtomicBucket.Bench.VariableCostLimiter, as: VariableCostLimiter
+require AtomicBucket.Bench.VariableCostPersLimiter, as: VariableCostPersLimiter
+
+VariableCostLimiter.start_link()
+VariableCostPersLimiter.start_link()
 
 IO.puts(
   """
   ###############################################################################################################
-  #                                                R E Q U E S T                                                #
+  #                                              VariableCostLimiter                                            #
   ###############################################################################################################
   """
 )
@@ -20,17 +24,17 @@ Benchee.run(
     "request (literals, reusing ref)" => {
       fn
         %{size: :normal, bucket_id: id} ->
-          {_, _, ref} = request(id, 1, 5_000, 1_000)
+          {_, _, ref} = VariableCostLimiter.request(id, 1_000, 5, 1)
 
           for _ <- 1..(iter_requests() - 1) do
-            request(id, 1, 5_000, 1_000, ref: ref)
+            VariableCostLimiter.request(id, 1_000, 5, 1, ref: ref)
           end
 
         %{size: :monster, bucket_id: id} ->
-          {_, _, ref} = request(id, 1, 5_000_000_000, 2_100_000_000)
+          {_, _, ref} = VariableCostLimiter.request(id, 2_100_000_000, 1, 1)
 
           for _ <- 1..(iter_requests() - 1) do
-            request(id, 1, 5_000_000_000, 2_100_000_000, ref: ref)
+            VariableCostLimiter.request(id, 2_100_000_000, 1, 1, ref: ref)
           end
       end,
       before_scenario: &put_unique_bucket_id/1
@@ -39,12 +43,12 @@ Benchee.run(
       fn
         %{size: :normal, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            request(id, 1, 5_000, 1_000, persistent: true)
+            VariableCostPersLimiter.request(id, 1_000, 5, 1)
           end
 
         %{size: :monster, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            request(id, 1, 5_000_000_000, 2_100_000_000, persistent: true)
+            VariableCostPersLimiter.request(id, 2_100_000_000, 1, 1)
           end
       end,
       before_scenario: &put_unique_bucket_id/1
@@ -53,38 +57,38 @@ Benchee.run(
       fn
         %{size: :normal, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            request(id, 1, 5_000, 1_000)
+            VariableCostLimiter.request(id, 1_000, 5, 1)
           end
 
         %{size: :monster, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            request(id, 1, 5_000_000_000, 2_100_000_000)
+            VariableCostLimiter.request(id, 2_100_000_000, 1, 1)
           end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
     "request (non-literals, reusing ref)" => {
-      fn %{bucket_id: id, requests: requests, burst: burst} ->
-        {_, _, ref} = request(id, 1, requests, burst)
+      fn %{bucket_id: id, capacity: capacity, refill_ms: refill_ms} ->
+        {_, _, ref} = VariableCostLimiter.request(id, capacity, refill_ms, 1)
 
         for _ <- 1..(iter_requests() - 1) do
-          request(id, 1, requests, burst, ref: ref)
+          VariableCostLimiter.request(id, capacity, refill_ms, 1, ref: ref)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
     "request (non-literals, persistent)" => {
-      fn %{bucket_id: id, requests: requests, burst: burst} ->
+      fn %{bucket_id: id, capacity: capacity, refill_ms: refill_ms} ->
         for _ <- 1..iter_requests() do
-          request(id, 1, requests, burst, persistent: true)
+          VariableCostPersLimiter.request(id, capacity, refill_ms, 1)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
     "request (non-literals, default opts)" => {
-      fn %{bucket_id: id, requests: requests, burst: burst} ->
+      fn %{bucket_id: id, capacity: capacity, refill_ms: refill_ms} ->
         for _ <- 1..iter_requests() do
-          request(id, 1, requests, burst)
+          VariableCostLimiter.request(id, capacity, refill_ms, 1)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
@@ -93,13 +97,13 @@ Benchee.run(
   inputs: %{
     "Normal bucket (small atomic)" => %{
       size: :normal,
-      requests: 5_000,
-      burst: 1_000
+      capacity: 1_000,
+      refill_ms: 5
     },
     "Monster bucket (big atomic)" => %{
       size: :monster,
-      requests: 5_000_000_000,
-      burst: 2_100_000_000
+      capacity: 2_100_000_000,
+      refill_ms: 1
     }
   },
   exclude_outliers: true,

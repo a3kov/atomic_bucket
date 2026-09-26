@@ -1,11 +1,42 @@
 defmodule AtomicBucket.Bench do
   @moduledoc false
 
+  defmodule FixedCostLimiter do
+    @moduledoc false
+    use AtomicBucket.FixedCostLimiter
+  end
+
+  defmodule FixedCostPersLimiter do
+    @moduledoc false
+    use AtomicBucket.FixedCostLimiter,
+      persistent: true
+  end
+
+  defmodule VariableCostLimiter do
+    @moduledoc false
+    use AtomicBucket.VariableCostLimiter
+  end
+
+  defmodule VariableCostPersLimiter do
+    @moduledoc false
+    use AtomicBucket.VariableCostLimiter,
+      persistent: true
+  end
+
+  defmodule MultiRateLimiter do
+    @moduledoc false
+    use AtomicBucket.MultiRateLimiter
+  end
+
+  defmodule MultiRatePersLimiter do
+    @moduledoc false
+    use AtomicBucket.MultiRateLimiter,
+      persistent: true
+  end
+
   defmacro __using__(_opts) do
     quote do
-      require AtomicBucket
       require AtomicBucket.Bench
-      import AtomicBucket
       import AtomicBucket.Bench
     end
   end

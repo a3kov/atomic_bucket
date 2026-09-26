@@ -11,7 +11,6 @@ defmodule AtomicBucket do
   @max_window div(1 <<< 31, 1000)
   @max_capacity (1 <<< @token_bits) - 1
   @timer_modulus 1 <<< @timer_bits
-  @detault_multi_details? false
   @default_cleanup_interval :timer.hours(1)
   @default_max_idle_period :timer.hours(24)
   @test_env? Application.compile_env(:atomic_bucket, :test_env, false)
@@ -19,105 +18,31 @@ defmodule AtomicBucket do
             [
               validate_raw_params!: 3,
               validate_rates!: 1,
-              get_bucket: 3,
-              open_bucket: 4,
-              try_create_bucket: 3,
+              get_bucket: 5,
+              open_bucket: 6,
+              try_create_bucket: 5,
               pack_bucket: 3,
               unpack_bucket: 2,
               bucket_timer: 1,
               wrapping_timer: 0,
               get_timer: 1,
               wrapping_timer_delta: 2,
-              persistent_bucket?: 1,
               pos_int?: 1,
-              pt_get: 2,
-              pt_bucket_key: 2,
-              table: 1
+              pt_key: 2
             ]}
 
   @type verdict :: :allow | :deny
 
-  @doc """
-  Checks if the request is allowed according to desired rate assuming
-  all requests have same cost.
-
-  The bucket is initialized in full state. Every request will refill
-  the bucket if needed and check if the new token amount is enough
-  to make the request. On success the request tokens are removed from
-  the bucket and the function returns `{:allow, requests, bucket_ref}`
-  where requests is the number of possible additional requests based
-  on the remaining tokens in the bucket. Otherwise, the bucket is left
-  untouched and the function returns `{:deny, timeout, bucket_ref}`
-  where timeout is estimated period in ms after which the request may
-  be allowed, according to the bucket state and the refill rate.
-  `bucket_ref` is a reference to the bucket atomic.
-
-  Arguments:
-    - `bucket` bucket id, unique within its table
-    - `window` defines window in seconds
-    - `window_requests` number of allowed requests in the window,
-      according to the target rate. Together with window defines
-      refill rate of the bucket.
-    - `burst_requests` number of burst requests. Defines bucket
-      capacity. Bursts ignore target request rate, and thus may
-      significantly alter effective rate.
-
-  Supported options:
-    - `persistent` if true, the bucket reference is also cached in
-      `:persistent_term`. Default is false.
-
-    - `ref` bucket atomic reference. If provided, the call will try
-      to use it instead of refetching.
-
-    - `table` ETS table name atom. Default is AtomicBucket.
-  """
-  @spec request(
-          bucket :: any(),
-          window :: pos_integer(),
-          window_requests :: pos_integer(),
-          burst_requests :: pos_integer(),
-          opts :: keyword()
-        ) ::
-          {:allow, bucket_requests :: non_neg_integer(), :atomics.atomics_ref()}
-          | {:deny, timeout :: timeout(), :atomics.atomics_ref()}
-
-  defmacro request(bucket, window, window_requests, burst_requests, opts \\ []) do
-    with {:ok, w} <- expand_int(window, "window", __CALLER__, true),
-         {:ok, r} <- expand_int(window_requests, "window_requests", __CALLER__, true),
-         {:ok, b} <- expand_int(burst_requests, "burst_requests", __CALLER__, true) do
-      {capacity, refill, cost} = fixed_cost_params(w, r, b)
-
-      quote do
-        AtomicBucket.__validated_request__(
-          unquote(bucket),
-          unquote(capacity),
-          unquote(refill),
-          unquote(cost),
-          unquote(opts)
-        )
-      end
-    else
-      _ ->
-        quote do
-          AtomicBucket.__unvalidated_request__(
-            unquote(bucket),
-            unquote(window),
-            unquote(window_requests),
-            unquote(burst_requests),
-            unquote(opts)
-          )
-        end
-    end
+  def _unvalidated_req(bucket, table, window, requests, burst, persistent, idle_p, opts) do
+    {capacity, refill_ms, cost} = fixed_cost_params(window, requests, burst, idle_p)
+    _validated_req(bucket, table, capacity, refill_ms, cost, persistent, opts)
   end
 
-  def __unvalidated_request__(bucket, window, requests, burst_requests, opts) do
-    {capacity, refill_ms, cost} = fixed_cost_params(window, requests, burst_requests)
-    __validated_request__(bucket, capacity, refill_ms, cost, opts)
-  end
-
-  def __validated_request__(bucket, capacity, refill_ms, cost, opts) do
+  def _validated_req(bucket, table, capacity, refill_ms, cost, persistent, opts) do
     timer = get_timer(opts)
-    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
+
+    {bucket_ref, atomic, prev_timer, tokens} =
+      get_bucket(bucket, table, capacity, persistent, opts)
 
     tokens_after_refill =
       min(capacity, tokens + refill_ms * wrapping_timer_delta(prev_timer, timer))
@@ -132,23 +57,25 @@ defmodule AtomicBucket do
           {:allow, div(tokens_after_request, cost), bucket_ref}
 
         _ ->
-          __validated_request__(bucket, capacity, refill_ms, cost, opts)
+          _validated_req(bucket, table, capacity, refill_ms, cost, persistent, opts)
       end
     else
       {:deny, div(cost - tokens_after_refill, refill_ms), bucket_ref}
     end
   end
 
-  defp fixed_cost_params(window, requests, burst_requests) do
+  @doc false
+  def fixed_cost_params(window, requests, burst_requests, idle_period) do
     if !pos_int?(window), do: pos_int_arg_error!("window")
     if !pos_int?(requests), do: pos_int_arg_error!("window_requests")
     if !pos_int?(burst_requests), do: pos_int_arg_error!("burst_requests")
 
-    if window > @max_window do
-      raise ArgumentError, "Window is above the limit (#{@max_window})."
+    window_ms = window * 1000
+
+    if window_ms >= idle_period do
+      raise ArgumentError, "Window must be less than max_idle_period (#{idle_period} ms)."
     end
 
-    window_ms = window * 1000
     cost = div(window_ms, Integer.gcd(requests, window_ms))
     refill = div(requests * cost, window_ms)
     capacity = burst_requests * cost
@@ -166,72 +93,14 @@ defmodule AtomicBucket do
     {capacity, refill, cost}
   end
 
-  @doc """
-  Checks if the request is allowed according to bucket parameters.
-
-  Supports variable (including zero and negative) cost.
-
-  The bucket is initialized in full state. Every request will refill
-  the bucket if needed and check if the new token amount with the cost applied
-  is valid (not negative). Tokens above the capacity are discarded.
-
-  Returns `{:allow, tokens, bucket_ref}` or `{:deny, tokens, bucket_ref}`
-  where `tokens` is the number of remaining tokens in the bucket.
-
-  Arguments:
-    - `bucket` bucket id, unique within its table
-    - `capacity` bucket capacity
-    - `refill_ms` number of tokens added to the bucket every millisecond
-    - `cost` number of tokens added or removed from the bucket for the current
-      request to succeed, where negative values mean addition.
-
-  Supports same options as request/5
-  """
-  @spec raw_request(
-          bucket :: any(),
-          capacity :: pos_integer(),
-          refill_ms :: pos_integer(),
-          cost :: integer(),
-          opts :: keyword()
-        ) :: {verdict(), tokens :: non_neg_integer(), :atomics.atomics_ref()}
-
-  defmacro raw_request(bucket, capacity, refill_ms, cost, opts \\ []) do
-    with {:ok, cap_int} <- expand_int(capacity, "capacity", __CALLER__, true),
-         {:ok, ref_int} <- expand_int(refill_ms, "refill_ms", __CALLER__, true),
-         {:ok, cost_int} <- expand_int(cost, "cost", __CALLER__) do
-      validate_raw_params!(cap_int, ref_int, cost_int)
-
-      quote do
-        AtomicBucket.__validated_raw_request__(
-          unquote(bucket),
-          unquote(cap_int),
-          unquote(ref_int),
-          unquote(cost_int),
-          unquote(opts)
-        )
-      end
-    else
-      _ ->
-        quote do
-          AtomicBucket.__unvalidated_raw_request__(
-            unquote(bucket),
-            unquote(capacity),
-            unquote(refill_ms),
-            unquote(cost),
-            unquote(opts)
-          )
-        end
-    end
-  end
-
-  def __unvalidated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
+  def _unvalidated_raw_req(id, table, capacity, refill_ms, cost, persistent, opts) do
     validate_raw_params!(capacity, refill_ms, cost)
-    __validated_raw_request__(bucket, capacity, refill_ms, cost, opts)
+    _validated_raw_req(id, table, capacity, refill_ms, cost, persistent, opts)
   end
 
-  def __validated_raw_request__(bucket, capacity, refill_ms, cost, opts) do
+  def _validated_raw_req(id, table, capacity, refill_ms, cost, persistent, opts) do
     timer = get_timer(opts)
-    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(bucket, capacity, opts)
+    {bucket_ref, atomic, prev_timer, tokens} = get_bucket(id, table, capacity, persistent, opts)
     elapsed = wrapping_timer_delta(prev_timer, timer)
     tokens_after_refill = min(capacity, tokens + refill_ms * elapsed)
     tokens_after_request = min(capacity, tokens_after_refill - cost)
@@ -244,14 +113,15 @@ defmodule AtomicBucket do
           {:allow, tokens_after_request, bucket_ref}
 
         _ ->
-          __validated_raw_request__(bucket, capacity, refill_ms, cost, opts)
+          _validated_raw_req(id, table, capacity, refill_ms, cost, persistent, opts)
       end
     else
       {:deny, tokens_after_refill, bucket_ref}
     end
   end
 
-  defp validate_raw_params!(capacity, refill_ms, cost) do
+  @doc false
+  def validate_raw_params!(capacity, refill_ms, cost) do
     if !pos_int?(capacity), do: pos_int_arg_error!("capacity")
     if !pos_int?(refill_ms), do: pos_int_arg_error!("refill_ms")
     if !is_integer(cost), do: int_arg_error!("cost")
@@ -269,106 +139,12 @@ defmodule AtomicBucket do
     end
   end
 
-  @doc """
-  Checks if the request is allowed according to multiple rate limits.
-  By default fixed request cost is assumed, but variable cost is also
-  supported via cost factor.
-
-  Uses simplified algorithm, where each rate is represented as
-  request interval in milliseconds instead of window and requests.
-  The bucket is updated in a single atomic operation.
-
-  Multiple buckets are initialized in full state. Every request will
-  refill each bucket if needed and check if all buckets have enough
-  tokens to make the request. On success the request tokens are
-  removed from each bucket and the call returns `{:allow, bucket_ref}`.
-  Otherwise, each bucket is left untouched and the call returns
-  `{:deny, bucket_ref}`. `bucket_ref` is a reference to the bucket
-  atomic.
-
-  There must be no duplicate intervals inside the sub-buckets, and lower
-  rate buckets must have bigger bursts (otherwise they kick in too soon).
-
-  Arguments:
-    - `bucket_id` any id unique within the bucket table
-    - `sub_buckets` a map describing sub-buckets, with sub-bucket
-      names as keys and `{request interval in milliseconds, burst requests}`
-      tuples as values.
-    - `cost_factor` integer multiplier for the request cost
-
-  Supports same options as `request/5`, plus:
-    - `:details` - whether to return sub-bucket results (boolean).
-      If true, the call returns either `{:allow, requests, bucket_ref}`,
-      where `requests` is a map with remaining requests of each sub-bucket,
-      or `{:deny, results, bucket_ref}`, where `results` is a map with
-      sub-bucket name keys and result tuples (`{:allow, remaining requests}`
-      or `{:deny, timeout}`) as values.
-      If false (default value), only basic verdict is returned.
-      Disabled details skip unnecessary calculations, and turning them on
-      has big impact on performance of the operation.
-      Note that remaining requests in the result tuple reflect final number
-      of available requests in the sub-bucket after the call.
-  """
-  @spec multi_request(
-          bucket_id :: any(),
-          sub_buckets :: %{
-            (name :: atom()) => {request_interval :: pos_integer(), burst :: pos_integer()}
-          },
-          cost_factor :: integer(),
-          opts :: keyword()
-        ) ::
-          {verdict(), :atomics.atomics_ref()}
-          | {:allow, %{(name :: any()) => non_neg_integer()}, :atomics.atomics_ref()}
-          | {:deny, %{(name :: any()) => {verdict(), non_neg_integer()}}, :atomics.atomics_ref()}
-
-  defmacro multi_request(bucket_id, sub_buckets, cost_factor \\ 1, opts \\ []) do
-    buckets = Macro.expand(sub_buckets, __CALLER__)
-    cf = Macro.expand(cost_factor, __CALLER__)
-    opts = Macro.expand(opts, __CALLER__)
-
-    if Macro.quoted_literal?(buckets) && Macro.quoted_literal?(cf) do
-      if !is_integer(cf), do: int_arg_error!("cost_factor")
-      {:%{}, _, bucket_list} = buckets
-      {buckets, t_int} = prepare_multi_params(bucket_list, cf)
-      b_ast = Enum.map(buckets, fn {k, v} -> {k, Macro.escape(v)} end)
-
-      case expand_details(opts) do
-        true ->
-          quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
-            AtomicBucket.__multi_request_details__(id, b_ast, t_int, cf, opts)
-          end
-
-        false ->
-          quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
-            AtomicBucket.__multi_request__(id, b_ast, t_int, cf, opts)
-          end
-
-        _ ->
-          quote bind_quoted: [id: bucket_id, b_ast: b_ast, t_int: t_int, cf: cf, opts: opts] do
-            AtomicBucket.__multi_request_check_details__(id, b_ast, t_int, cf, opts)
-          end
-      end
-    else
-      quote bind_quoted: [id: bucket_id, buckets: buckets, cf_ast: cost_factor, opts: opts] do
-        AtomicBucket.__unvalidated_multi_request__(id, buckets, cf_ast, opts)
-      end
-    end
-  end
-
-  defp expand_details(opts) when is_list(opts) do
-    # Only get the value if all keys are expanded.
-    if Enum.all?(opts, fn {k, _} -> is_atom(k) end) do
-      Keyword.get(opts, :details, @detault_multi_details?)
-    end
-  end
-
-  defp expand_details(_opts), do: nil
-
-  defp prepare_multi_params([], _cost_factor) do
+  @doc false
+  def multi_params([], _cost_factor) do
     raise ArgumentError, "Must include at least 1 sub-bucket."
   end
 
-  defp prepare_multi_params(buckets, cost_factor) do
+  def multi_params(buckets, cost_factor) do
     # token_interval/1 must be first because it's doing validation.
     t_interval = token_interval(buckets)
     sorted_buckets = Enum.sort_by(buckets, fn {_, {i, _}} -> i end)
@@ -447,21 +223,20 @@ defmodule AtomicBucket do
     raise ArgumentError, "Invalid sub-bucket parameter: #{name} must be a positive integer."
   end
 
-  def __unvalidated_multi_request__(id, buckets, cf, opts) do
-    {buckets, t_interval} = Map.to_list(buckets) |> prepare_multi_params(cf)
-    __multi_request_check_details__(id, buckets, t_interval, cf, opts)
+  def _unvalidated_multi_req(id, table, buckets, cf, persistent, opts) do
+    {buckets, t_interval} = Map.to_list(buckets) |> multi_params(cf)
+    _multi_req(id, table, buckets, t_interval, cf, persistent, opts)
   end
 
-  def __multi_request_check_details__(id, buckets, t_interval, cf, opts) do
-    if Keyword.get(opts, :details, @detault_multi_details?) do
-      __multi_request_details__(id, buckets, t_interval, cf, opts)
-    else
-      __multi_request__(id, buckets, t_interval, cf, opts)
-    end
+  def _unvalidated_multi_req_details(id, table, buckets, cf, persistent, opts) do
+    {buckets, t_interval} = Map.to_list(buckets) |> multi_params(cf)
+    _multi_req_details(id, table, buckets, t_interval, cf, persistent, opts)
   end
 
-  def __multi_request__(id, buckets, t_interval, cf, opts) do
-    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
+  def _multi_req(id, table, buckets, t_interval, cf, persistent, opts) do
+    {bucket_ref, atomic, prev_timer, ams_old} =
+      get_bucket(id, table, buckets, persistent, opts)
+
     timer = get_timer(opts)
     elapsed = wrapping_timer_delta(prev_timer, timer)
     refill = div(elapsed, t_interval)
@@ -476,15 +251,17 @@ defmodule AtomicBucket do
           {:allow, bucket_ref}
 
         _ ->
-          __multi_request__(id, buckets, t_interval, cf, opts)
+          _multi_req(id, table, buckets, t_interval, cf, persistent, opts)
       end
     catch
       _ -> {:deny, bucket_ref}
     end
   end
 
-  def __multi_request_details__(id, buckets, t_interval, cf, opts) do
-    {bucket_ref, atomic, prev_timer, ams_old} = get_bucket(id, buckets, opts)
+  def _multi_req_details(id, table, buckets, t_interval, cf, persistent, opts) do
+    {bucket_ref, atomic, prev_timer, ams_old} =
+      get_bucket(id, table, buckets, persistent, opts)
+
     timer = get_timer(opts)
     elapsed = wrapping_timer_delta(prev_timer, timer)
     refill = div(elapsed, t_interval)
@@ -501,7 +278,7 @@ defmodule AtomicBucket do
           {:allow, results, bucket_ref}
 
         _ ->
-          __multi_request_details__(id, buckets, t_interval, cf, opts)
+          _multi_req_details(id, table, buckets, t_interval, cf, persistent, opts)
       end
     else
       results =
@@ -528,7 +305,7 @@ defmodule AtomicBucket do
     [tokens - cost | charge_all(amounts, buckets, cf)]
   end
 
-  # Fast path for details=false.
+  # Fast path skipping details.
   defp refill_charge_all([], [], _refill, _cf), do: []
 
   defp refill_charge_all(amounts, buckets, refill, 0) do
@@ -585,7 +362,65 @@ defmodule AtomicBucket do
     denied_requests(ams_old, ams_refill, ams_request, buckets, t_interval, elapsed, acc)
   end
 
-  defp expand_int(ast, name, env, pos? \\ false) do
+  @doc false
+  def validated_rate_limiter_opts(opts, module) do
+    if !Keyword.keyword?(opts) do
+      raise ArgumentError, "Rate limiter options must be a keyword list"
+    end
+
+    table = Keyword.get(opts, :table, module)
+    cleanup_interval = Keyword.get(opts, :cleanup_interval, @default_cleanup_interval)
+    max_idle_period = Keyword.get(opts, :max_idle_period, @default_max_idle_period)
+    persistent = Keyword.get(opts, :persistent, false)
+
+    if !is_atom(table) do
+      raise ArgumentError, "Rate limiter table must be an atom"
+    end
+
+    validate_cleanup_arg!(cleanup_interval, :cleanup_interval)
+    validate_cleanup_arg!(max_idle_period, :max_idle_period)
+
+    if cleanup_interval > max_idle_period do
+      raise ArgumentError, "cleanup_interval must be less than or equal to max_idle_period"
+    end
+
+    if !is_boolean(persistent) do
+      raise ArgumentError, "persistent must be a boolean"
+    end
+
+    %{
+      table: table,
+      cleanup_interval: cleanup_interval,
+      max_idle_period: max_idle_period,
+      persistent: persistent
+    }
+  end
+
+  defp validate_cleanup_arg!(value, name) do
+    max_window_ms = @max_window * 1000
+
+    if !is_integer(value) || value <= 0 || value >= max_window_ms do
+      raise ArgumentError, "#{name} must be a positive integer less than #{max_window_ms}"
+    end
+  end
+
+  @doc false
+  def set_rate_limiter_attributes(validated_opts, module) do
+    %{
+      table: table,
+      cleanup_interval: cleanup_interval,
+      max_idle_period: max_idle_period,
+      persistent: persistent
+    } = validated_opts
+
+    Module.put_attribute(module, :atomic_bucket_table, table)
+    Module.put_attribute(module, :atomic_bucket_cleanup_interval, cleanup_interval)
+    Module.put_attribute(module, :atomic_bucket_max_idle_period, max_idle_period)
+    Module.put_attribute(module, :atomic_bucket_persistent, persistent)
+  end
+
+  @doc false
+  def expand_int(ast, name, env, pos? \\ false) do
     case Macro.expand(ast, env) do
       i when is_integer(i) ->
         {:ok, i}
@@ -604,7 +439,8 @@ defmodule AtomicBucket do
 
   defp pos_int?(value), do: is_integer(value) && value > 0
 
-  defp int_arg_error!(name) do
+  @doc false
+  def int_arg_error!(name) do
     raise ArgumentError, "Invalid argument: #{name} must be an integer."
   end
 
@@ -612,31 +448,31 @@ defmodule AtomicBucket do
     raise ArgumentError, "Invalid argument: #{name} must be a positive integer."
   end
 
-  defp get_bucket(bucket_id, capacity_info, opts) do
+  defp get_bucket(id, table, capacity_info, persistent, opts) do
     cond do
-      bucket_ref = Keyword.get(opts, :ref) ->
-        open_bucket(bucket_ref, bucket_id, capacity_info, opts)
+      ref = Keyword.get(opts, :ref) ->
+        open_bucket(ref, id, table, capacity_info, persistent, opts)
 
-      bucket_ref = persistent_bucket?(opts) && pt_get(bucket_id, opts) ->
-        open_bucket(bucket_ref, bucket_id, capacity_info, opts)
+      ref = persistent && :persistent_term.get(pt_key(table, id), nil) ->
+        open_bucket(ref, id, table, capacity_info, persistent, opts)
 
       true ->
-        case :ets.lookup(table(opts), bucket_id) do
-          [{_, bucket_ref}] ->
-            open_bucket(bucket_ref, bucket_id, capacity_info, opts)
+        case :ets.lookup(table, id) do
+          [{_, ref}] ->
+            open_bucket(ref, id, table, capacity_info, persistent, opts)
 
           [] ->
-            try_create_bucket(bucket_id, capacity_info, opts)
+            try_create_bucket(id, table, capacity_info, persistent, opts)
         end
     end
   end
 
-  defp open_bucket(bucket_ref, bucket_id, capacity_info, opts) do
-    atomic = :atomics.get(bucket_ref, 1)
+  defp open_bucket(ref, id, table, capacity_info, persistent, opts) do
+    atomic = :atomics.get(ref, 1)
 
     case unpack_bucket(atomic, capacity_info) do
       {tokens, timer, 0} ->
-        {bucket_ref, atomic, timer, tokens}
+        {ref, atomic, timer, tokens}
 
       _ ->
         # When deleting buckets, after updating the atomic the server will
@@ -645,40 +481,29 @@ defmodule AtomicBucket do
         # We make sure this is not a reference passed via options, so that
         # we don't get stuck in infinite loop.
         opts = Keyword.drop(opts, [:ref])
-        get_bucket(bucket_id, capacity_info, opts)
+        get_bucket(id, table, capacity_info, persistent, opts)
     end
   end
 
-  defp try_create_bucket(bucket, capacity_info, opts) do
-    table = table(opts)
+  defp try_create_bucket(id, table, capacity_info, persistent, opts) do
     bucket_ref = :atomics.new(1, signed: false)
     timer = get_timer(opts)
     tokens = new_bucket_tokens(capacity_info)
     atomic = pack_bucket(tokens, timer, capacity_info)
     :atomics.put(bucket_ref, 1, atomic)
 
-    if :ets.insert_new(table, {bucket, bucket_ref}) do
-      if persistent_bucket?(opts) do
-        :persistent_term.put(pt_bucket_key(table, bucket), bucket_ref)
+    if :ets.insert_new(table, {id, bucket_ref}) do
+      if persistent do
+        :persistent_term.put(pt_key(table, id), bucket_ref)
       end
 
       {bucket_ref, atomic, timer, tokens}
     else
-      get_bucket(bucket, capacity_info, opts)
+      get_bucket(id, table, capacity_info, persistent, opts)
     end
   end
 
-  defp persistent_bucket?(opts), do: Keyword.get(opts, :persistent, false)
-
-  defp pt_get(bucket, opts) do
-    table(opts)
-    |> pt_bucket_key(bucket)
-    |> :persistent_term.get(nil)
-  end
-
-  defp table(opts), do: Keyword.get(opts, :table, __MODULE__)
-
-  defp pt_bucket_key(table, bucket), do: {__MODULE__, table, bucket}
+  defp pt_key(table, id), do: {__MODULE__, table, id}
 
   if @test_env? do
     defp get_timer(opts) do
@@ -750,57 +575,24 @@ defmodule AtomicBucket do
     atomic >>> 1 &&& (1 <<< @timer_bits) - 1
   end
 
-  def child_spec(init_arg) do
-    %{
-      id: {__MODULE__, Keyword.get(init_arg, :table, __MODULE__)},
-      start: {__MODULE__, :start_link, [init_arg]}
-    }
+  @doc false
+  def child_spec(_init_arg) do
+    raise ArgumentError, "Use a rate limiter module to start the server."
   end
 
-  @doc """
-  Starts the process that manages ETS table for bucket data and
-  periodically deletes idle buckets.
-
-  The function does only basic validation of the cleanup parameters.
-  Developers must ensure that buckets idling for more than ~24 days
-  are deleted: longer periods are not supported by the wrapping timer
-  used by the library.
-
-  In addition to standard GenServer options, accepts the following:
-    - `:cleanup_interval` interval in ms defining how often the server will try
-      to delete idle buckets. It is applied on completion of a cleanup.
-      Default is 1 hour.
-
-    - `:max_idle_period` max period in ms since last bucket update before
-      it is deleted. Default is 24 hours.
-
-    - `:table` ETS table name atom. Default is AtomicBucket.
-  """
+  @doc false
   def start_link(opts) do
-    {gen_opts, opts} =
-      Keyword.split(opts, [:debug, :name, :timeout, :spawn_opt, :hibernate_after])
-
-    validate_cleanup_arg!(:cleanup_interval, cleanup_interval(opts))
-    validate_cleanup_arg!(:max_idle_period, max_idle_period(opts))
-
-    GenServer.start_link(__MODULE__, opts, gen_opts)
-  end
-
-  defp validate_cleanup_arg!(name, value) do
-    max_window_ms = @max_window * 1000
-
-    if !is_integer(value) || value <= 0 || value >= max_window_ms do
-      raise ArgumentError, "#{name} must be a positive integer less than #{max_window_ms}"
-    end
+    gen_keys = [:debug, :name, :timeout, :spawn_opt]
+    {gen_opts, opts} = Keyword.split(opts, gen_keys)
+    init_arg = Map.new(opts)
+    GenServer.start_link(__MODULE__, init_arg, gen_opts)
   end
 
   @impl true
-  def init(opts) do
-    table = Keyword.get(opts, :table, __MODULE__)
-    cleanup_interval = cleanup_interval(opts)
-    max_idle_period = max_idle_period(opts)
+  def init(params) do
+    %{type: module, table: table, cleanup_interval: cleanup_interval} = params
 
-    Process.set_label({__MODULE__, table})
+    Process.set_label({__MODULE__, module, table})
 
     :ets.new(table, [
       :named_table,
@@ -811,29 +603,29 @@ defmodule AtomicBucket do
 
     schedule_cleanup(cleanup_interval)
 
-    state = %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period}
-    {:ok, state, :hibernate}
+    {:ok, params, :hibernate}
   end
-
-  defp cleanup_interval(opts), do: Keyword.get(opts, :cleanup_interval, @default_cleanup_interval)
-
-  defp max_idle_period(opts), do: Keyword.get(opts, :max_idle_period, @default_max_idle_period)
 
   @impl true
   def handle_info(:cleanup, state) do
-    %{table: table, cleanup_interval: cleanup_interval, max_idle_period: max_idle_period} = state
+    %{
+      table: table,
+      cleanup_interval: cleanup_interval,
+      max_idle_period: max_idle_period,
+      persistent: persistent
+    } = state
 
     # Make sure only 1 task can run at a time.
     Task.async(fn ->
-      fn {bucket, bucket_ref}, _ ->
+      fn {id, bucket_ref}, _ ->
         atomic = :atomics.get(bucket_ref, 1)
         timer = wrapping_timer()
         bucket_timer = bucket_timer(atomic)
         pending? = wrapping_timer_delta(bucket_timer, timer) > max_idle_period
 
         if pending? && :ok == :atomics.compare_exchange(bucket_ref, 1, atomic, 1) do
-          :ets.delete_object(table, {bucket, bucket_ref})
-          :persistent_term.erase(pt_bucket_key(table, bucket))
+          :ets.delete_object(table, {id, bucket_ref})
+          persistent && :persistent_term.erase(pt_key(table, id))
         end
       end
       |> :ets.foldl(nil, table)
@@ -851,5 +643,5 @@ defmodule AtomicBucket do
     Process.send_after(self(), :cleanup, cleanup_interval)
   end
 
-  def __max_capacity__(), do: @max_capacity
+  def _max_capacity(), do: @max_capacity
 end

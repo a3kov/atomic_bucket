@@ -6,7 +6,7 @@ defmodule AtomicBucket.MixProject do
   def project do
     [
       app: :atomic_bucket,
-      version: "0.4.1",
+      version: "0.5.0",
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -31,7 +31,8 @@ defmodule AtomicBucket.MixProject do
     ]
   end
 
-  defp elixirc_paths(e) when e in [:dev, :test], do: ["lib", "bench/support"]
+  defp elixirc_paths(:dev), do: ["lib", "bench/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "bench/support"]
   defp elixirc_paths(_), do: ["lib"]
 
   def application do

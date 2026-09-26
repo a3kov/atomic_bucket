@@ -1,133 +1,137 @@
 # This benchmark performs 1_000 rate limit checks in each iteration.
 #
 # Run it like so:
-# mix run bench/multi_request.exs
+# mix run bench/multi_rate_limiter.exs
 use AtomicBucket.Bench
 
-start_link([])
+require AtomicBucket.Bench.MultiRateLimiter, as: MultiRateLimiter
+require AtomicBucket.Bench.MultiRatePersLimiter, as: MultiRatePersLimiter
+
+MultiRateLimiter.start_link()
+MultiRatePersLimiter.start_link()
 
 IO.puts(
   """
   ###############################################################################################################
-  #                                            M U L T I  R E Q U E S T                                         #
+  #                                                 MultiRateLimiter                                            #
   ###############################################################################################################
   """
 )
 
 Benchee.run(
   %{
-    "multi_request (literals, reusing ref)" => {
+    "request (literals, reusing ref)" => {
       fn
         %{size: :small2, bucket_id: id} ->
-          {_, ref} = multi_request(id, buckets(:small2))
+          {_, ref} = MultiRateLimiter.request(id, buckets(:small2))
 
           for _ <- 1..(iter_requests() - 1) do
-            multi_request(id, buckets(:small2), 1, ref: ref)
+            MultiRateLimiter.request(id, buckets(:small2), 1, ref: ref)
           end
 
         %{size: :small3, bucket_id: id} ->
-          {_, ref} = multi_request(id, buckets(:small3))
+          {_, ref} = MultiRateLimiter.request(id, buckets(:small3))
 
           for _ <- 1..(iter_requests() - 1) do
-            multi_request(id, buckets(:small3), 1, ref: ref)
+            MultiRateLimiter.request(id, buckets(:small3), 1, ref: ref)
           end
 
         %{size: :big3, bucket_id: id} ->
-          {_, ref} = multi_request(id, buckets(:big3))
+          {_, ref} = MultiRateLimiter.request(id, buckets(:big3))
 
           for _ <- 1..(iter_requests() - 1) do
-            multi_request(id, buckets(:big3), 1, ref: ref)
+            MultiRateLimiter.request(id, buckets(:big3), 1, ref: ref)
           end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (literals, persistent)" => {
+    "request (literals, persistent)" => {
       fn
         %{size: :small2, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:small2), 1, persistent: true)
+            MultiRatePersLimiter.request(id, buckets(:small2), 1)
           end
 
         %{size: :small3, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:small3), 1, persistent: true)
+            MultiRatePersLimiter.request(id, buckets(:small3), 1)
           end
 
         %{size: :big3, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:big3), 1, persistent: true)
+            MultiRatePersLimiter.request(id, buckets(:big3), 1)
           end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (literals, details)" => {
+    "request_details (literals, default opts)" => {
       fn
         %{size: :small2, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:small2), 1, details: true)
+            MultiRateLimiter.request_details(id, buckets(:small2))
           end
 
         %{size: :small3, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:small3), 1, details: true)
+            MultiRateLimiter.request_details(id, buckets(:small3))
           end
 
         %{size: :big3, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:big3), 1, details: true)
+            MultiRateLimiter.request_details(id, buckets(:big3))
           end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (literals, default opts)" => {
+    "request (literals, default opts)" => {
       fn
         %{size: :small2, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:small2))
+            MultiRateLimiter.request(id, buckets(:small2))
           end
 
         %{size: :small3, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:small3))
+            MultiRateLimiter.request(id, buckets(:small3))
           end
 
         %{size: :big3, bucket_id: id} ->
           for _ <- 1..iter_requests() do
-            multi_request(id, buckets(:big3))
+            MultiRateLimiter.request(id, buckets(:big3))
           end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (non-literals, reusing ref)" => {
+    "request (non-literals, reusing ref)" => {
       fn %{bucket_id: bucket_id, buckets: buckets} ->
-        {_, ref} = multi_request(bucket_id, buckets)
+        {_, ref} = MultiRateLimiter.request(bucket_id, buckets)
 
         for _ <- 1..(iter_requests() - 1) do
-          multi_request(bucket_id, buckets, 1, ref: ref)
+          MultiRateLimiter.request(bucket_id, buckets, 1, ref: ref)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (non-literals, persistent)" => {
+    "request (non-literals, persistent)" => {
       fn %{bucket_id: bucket_id, buckets: buckets} ->
         for _ <- 1..iter_requests() do
-          multi_request(bucket_id, buckets, 1, persistent: true)
+          MultiRatePersLimiter.request(bucket_id, buckets, 1)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (non-literals, details)" => {
+    "request_details (non-literals, default opts)" => {
       fn %{bucket_id: bucket_id, buckets: buckets} ->
         for _ <- 1..iter_requests() do
-          multi_request(bucket_id, buckets, 1, details: true)
+          MultiRateLimiter.request_details(bucket_id, buckets)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
     },
-    "multi_request (non-literals, default opts)" => {
+    "request (non-literals, default opts)" => {
       fn %{bucket_id: bucket_id, buckets: buckets} ->
         for _ <- 1..iter_requests() do
-          multi_request(bucket_id, buckets)
+          MultiRateLimiter.request(bucket_id, buckets)
         end
       end,
       before_scenario: &put_unique_bucket_id/1
