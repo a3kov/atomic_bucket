@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.0 (2026-09-27)
+
+Breaking changes:
+ - rate limiter modules generate own macros that replace global macros
+
+ - rate limiter options replace global macro options and server options as the main
+   form of configuration
+
+ - each rate limiter module provides child spec for starting AtomicBucket server
+   managing its buckets
+
+ - `persistent` is now a parameter of rate limiter module, affecting all of its
+   buckets
+
+ - `raw_request` macro is now simply `request`
+
+ - multi-bucket `details` option converted to a separate `request_details` macro
+
 ## v0.4.1 (2026-09-21)
 
 Improve validation of sub-bucket rates.
