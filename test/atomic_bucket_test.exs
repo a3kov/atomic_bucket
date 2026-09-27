@@ -21,6 +21,7 @@ defmodule AtomicBucketTest do
         cleanup_interval: :timer.hours(24 * 23),
         max_idle_period: :timer.hours(24 * 24)
       ]
+
       AtomicBucket.validated_rate_limiter_opts(opts, TestLimiter)
     end
 
@@ -30,6 +31,7 @@ defmodule AtomicBucketTest do
           cleanup_interval: :timer.hours(24 * 24),
           max_idle_period: :timer.hours(24 * 25)
         ]
+
         AtomicBucket.validated_rate_limiter_opts(opts, TestLimiter)
       end
     end
@@ -40,6 +42,7 @@ defmodule AtomicBucketTest do
           cleanup_interval: :timer.hours(2),
           max_idle_period: :timer.hours(1)
         ]
+
         AtomicBucket.validated_rate_limiter_opts(opts, TestLimiter)
       end
     end
