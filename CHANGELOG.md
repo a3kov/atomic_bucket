@@ -14,7 +14,7 @@ Breaking changes:
  - `persistent` is now a parameter of rate limiter module, affecting all of its
    buckets
 
- - `raw_request` macro is now simply `request`
+ - `raw_request` and `multi_request` macros are now simply `request`
 
  - multi-bucket `details` option converted to a separate `request_details` macro
 
