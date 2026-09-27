@@ -234,7 +234,7 @@ For top performance you can reuse bucket references in long running processes.
 
 # Store bucket_ref somewhere, or pass it around.
 
-# This call is MUCH faster than the previous one.
+# This call is *much* faster than the previous one.
 MyFixedLimiter.request(:mybucket, 1, 10, 3, ref: bucket_ref)
 ```
 
