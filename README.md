@@ -251,7 +251,7 @@ very low values for `max_idle_period`. If in doubt, set it at least
 2x the largest rate limit window for the table.
 
 It's also a good idea to segregate the buckets using multiple limiters where
-each limiter is tuned for specific bucket type. This alows to keep lower rate
+each limiter is tuned for specific bucket type. This allows to keep lower rate
 buckets in memory for longer periods, while removing high rate buckets much sooner.
 
 
