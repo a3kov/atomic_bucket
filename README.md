@@ -120,7 +120,6 @@ the whole burst instant, while enforcing lower sustained long-term rates.
 This rate limiter type uses a different algorithm where rates are defined as request
 intervals. It stores multiple buckets in a single 64bit atomic but has some compromises:
   - rates resulting in fractional intervals are not supported
-
   - some combinations of rates can exceed maximum storage capacity
 
 If a combination of rates exceeds capacity limit, one could try to
@@ -174,8 +173,8 @@ defmodule CallerModule do
       %{hour: 29, minute: 6, second: 1} = requests
 
     {:deny, results, _bucket_ref} ->
-      # Each bucket has its own result similar to request/5, but the 
-      # number of requests reflects the state after the call (not reduced).
+      # Each bucket has its own result similar to `FixedCostLimiter.request/5`,
+      # but the number of requests reflects the state after the call (not reduced).
       %{hour: {:allow, 21}, minute: {:deny, 1804}, second: {:allow, 2}} = results
   end
 end
@@ -248,7 +247,7 @@ See `__using__/1` doc of each rate limiter for more info about the options.
 As the server doesn't know parameters of the buckets, and stored
 timestamps may lag because of lazy refills, it's better to avoid
 very low values for `max_idle_period`. If in doubt, set it at least
-2x the largest rate limit window for the table.
+2x the largest rate limit window for the rate limiter.
 
 It's also a good idea to segregate the buckets using multiple limiters where
 each limiter is tuned for specific bucket type. This allows to keep lower rate
