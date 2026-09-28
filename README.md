@@ -282,8 +282,7 @@ corresponding rate limiting module, and move the cleanup params to the `use` cal
 2) If an AtomicBucket table was used for different types of buckets (fixed, variable,
 multi-rate), add a module for each bucket type.
 
-3) If a table was used for persistent buckets, add a module for the persistent
-buckets with `persistent: true` option.
+3) If a table was used for persistent buckets, add a module having `persistent: true`.
 
 4) Replace all AtomicBucket calls with rate limiter module calls:
  - `AtomicBucket.request(..)` becomes `MyFixedLimiter.request(..)`
